@@ -53,6 +53,13 @@ const MoviesPanel = (() => {
     }
   }
 
+  function formatTime(sec) {
+    if (!sec || sec < 0) return "0:00";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
   function show(el) {
     if (el) el.classList.remove("hidden");
   }
@@ -243,14 +250,25 @@ const MoviesPanel = (() => {
     });
   }
 
-  function showEmbed(url) {
+  function showEmbed(url, startTime = 0) {
     const video = $("#movie-player");
     const embed = $("#movie-player-embed");
     if (!embed || !url) return;
     hide(video);
-    embed.src = url;
+    let finalUrl = url;
+    if (startTime > 30) {
+      // Try common time params for video embeds / P2P players
+      const sep = url.includes("?") ? "&" : "?";
+      finalUrl = `${url}${sep}t=${Math.floor(startTime)}`;
+      // Some players use start=
+      // finalUrl = `${url}${sep}start=${Math.floor(startTime)}`;
+    }
+    embed.src = finalUrl;
     show(embed);
-    setPlayerStatus("Memutar via player embed.");
+    const msg = startTime > 30 
+      ? `Memutar via player embed. (Coba lanjut dari ${formatTime(startTime)} — seek manual di player jika perlu)`
+      : "Memutar via player embed.";
+    setPlayerStatus(msg);
   }
 
   function setPlayerStatus(text) {
@@ -468,14 +486,15 @@ const MoviesPanel = (() => {
         data.player_mode === "embed" || (!m3u8 && embedUrl);
 
       if (embedOnly && embedUrl) {
-        showEmbed(embedUrl);
-        setPlayerStatus("Memutar via player embed (mirror WP).");
+        const saved = loadProgress(currentMovieUrl);
+        showEmbed(embedUrl, saved);
         return;
       }
 
       if (!m3u8) {
         if (embedUrl) {
-          showEmbed(embedUrl);
+          const saved = loadProgress(currentMovieUrl);
+          showEmbed(embedUrl, saved);
           return;
         }
         throw new Error("Link stream tidak tersedia");
@@ -491,13 +510,15 @@ const MoviesPanel = (() => {
       if (isDesktopLike() && embedUrl) {
         const started = attachHlsJs(video, proxied, embedUrl, referer, m3u8);
         if (!started) {
-          showEmbed(embedUrl);
+          const saved = loadProgress(currentMovieUrl);
+          showEmbed(embedUrl, saved);
           return;
         }
         window.setTimeout(() => {
           if (hlsInstance && video.paused && !video.ended && embedUrl) {
             destroyPlayer();
-            showEmbed(embedUrl);
+            const saved = loadProgress(currentMovieUrl);
+            showEmbed(embedUrl, saved);
           }
         }, 12000);
         return;
@@ -510,7 +531,8 @@ const MoviesPanel = (() => {
       if (canPlayNativeHls()) {
         playNativeHls(video, proxied, embedUrl);
       } else if (embedUrl) {
-        showEmbed(embedUrl);
+        const saved = loadProgress(currentMovieUrl);
+        showEmbed(embedUrl, saved);
       } else {
         throw new Error("Browser tidak mendukung HLS — gunakan Chrome/Firefox terbaru.");
       }
@@ -755,7 +777,12 @@ const MoviesPanel = (() => {
         }
       }
       renderServers(data.servers || []);
-      setPlayerStatus("Pilih server jika belum otomatis diputar.");
+      const saved = loadProgress(currentMovieUrl);
+      if (saved > 30) {
+        setPlayerStatus(`Pilih server untuk lanjut dari ${formatTime(saved)} (HLS auto-resume; P2P/Embed: seek manual atau coba param waktu di player).`);
+      } else {
+        setPlayerStatus("Pilih server jika belum otomatis diputar.");
+      }
     } catch (e) {
       if (titleEl) titleEl.textContent = "Gagal memuat";
       setPlayerStatus(e.message || "Detail film gagal dimuat.");
