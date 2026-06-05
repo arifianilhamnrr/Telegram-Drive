@@ -277,8 +277,11 @@ const MoviesPanel = (() => {
     show(grid);
     grid.innerHTML = movies
       .map((m) => {
-        const poster = m.poster
-          ? `<img class="movie-card-poster" src="${escapeHtml(m.poster)}" alt="" loading="lazy">`
+        const posterUrl = m.poster
+          ? `/api/movies/lk21/poster?u=${encodeURIComponent(m.poster)}`
+          : null;
+        const poster = posterUrl
+          ? `<img class="movie-card-poster" src="${escapeHtml(posterUrl)}" alt="" loading="lazy">`
           : `<div class="movie-card-poster"></div>`;
         const meta = [m.year, m.quality, m.rating ? `★ ${m.rating}` : null, m.duration]
           .filter(Boolean)
@@ -647,10 +650,11 @@ const MoviesPanel = (() => {
       }
       if (posterEl && posterWrap) {
         if (data.poster) {
-          posterEl.src = data.poster;
+          // Use our proxy so external lk21 poster images load reliably (no hotlink/CORS/referer blocks)
+          const proxied = `/api/movies/lk21/poster?u=${encodeURIComponent(data.poster)}`;
+          posterEl.src = proxied;
           posterEl.alt = data.title || "";
           posterEl.style.display = "";
-          // handle load errors gracefully (hotlink blocks etc)
           posterEl.onerror = () => {
             posterEl.style.display = "none";
           };

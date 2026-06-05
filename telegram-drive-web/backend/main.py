@@ -1038,6 +1038,40 @@ async def movies_lk21_hls(
     )
 
 
+@app.get("/api/movies/lk21/poster")
+async def movies_lk21_poster(u: str = "", user: User = Depends(require_user)):
+    """Proxy for movie posters so they load reliably (bypass hotlink/CORS/referer blocks on lk21 mirrors)."""
+    url = (u or "").strip()
+    if not url:
+        raise HTTPException(400, "u wajib")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "invalid poster url")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                },
+            )
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+            return Response(
+                content=resp.content,
+                media_type=ctype,
+                headers={
+                    "Cache-Control": "public, max-age=86400, immutable",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"poster fetch failed: {type(e).__name__}") from e
+    except Exception as e:
+        raise HTTPException(502, "poster proxy error") from e
+
+
 @app.post("/api/movies/lk21/save-to-telegram")
 async def movies_lk21_save_to_telegram(
     body: MovieSaveTelegramBody,
