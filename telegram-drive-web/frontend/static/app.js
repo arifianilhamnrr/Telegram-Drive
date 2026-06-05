@@ -53,6 +53,7 @@ function parseAppState() {
     state.kind = p.get("kind") || "new";
     state.page = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
     state.q = (p.get("q") || "").trim();
+    state.movieUrl = p.get("movie") ? decodeURIComponent(p.get("movie")) : null;
   } else if (panel === "settings") {
     state.section = p.get("section") || "";
   }
@@ -73,6 +74,7 @@ function syncAppState() {
     if (m.kind && m.kind !== "new") params.set("kind", m.kind);
     if (m.page > 1) params.set("page", m.page);
     if (m.q) params.set("q", m.q);
+    if (m.movieUrl) params.set("movie", encodeURIComponent(m.movieUrl));
   } else if (currentAppPanel === "settings") {
     const sec = window.currentSettingsSection || "";
     if (sec) params.set("section", sec);
@@ -97,13 +99,10 @@ window.addEventListener("popstate", () => {
     loadFolders({ reloadFiles: false });
     loadFiles(currentFolderId);
   } else if (currentAppPanel === "movies" && window.MoviesPanel?.setState) {
-    window.MoviesPanel.setState({ kind: s.kind, page: s.page, q: s.q });
-    // onShow will be called? but for popstate we may need to trigger reload
+    window.MoviesPanel.setState({ kind: s.kind, page: s.page, q: s.q, movieUrl: s.movieUrl });
     if (typeof window.MoviesPanel?.onShow === "function") {
-      // call with state to avoid reset
-      window.MoviesPanel.onShow({ kind: s.kind, page: s.page, q: s.q });
+      window.MoviesPanel.onShow({ kind: s.kind, page: s.page, q: s.q, movieUrl: s.movieUrl });
     } else {
-      // fallback
       showAppPanel("movies");
     }
   } else if (currentAppPanel === "settings") {
@@ -1736,8 +1735,14 @@ $("#btn-open-change-password")?.addEventListener("click", () => {
 });
 
 function showAppPanel(panel) {
+  const oldPanel = currentAppPanel;
   const p = panel === "settings" || panel === "movies" ? panel : "drive";
   currentAppPanel = p;
+
+  // clear movie deep link when leaving movies panel via nav (not via internal back)
+  if (oldPanel === "movies" && p !== "movies" && window.MoviesPanel?.setState) {
+    window.MoviesPanel.setState({ movieUrl: null });
+  }
   const drivePanel = $("#panel-drive");
   const settingsPanel = $("#panel-settings");
   const moviesPanel = $("#panel-movies");
@@ -1911,7 +1916,8 @@ function enterApp(st) {
     window.MoviesPanel.setState({
       kind: urlState.kind || "new",
       page: urlState.page || 1,
-      q: urlState.q || ""
+      q: urlState.q || "",
+      movieUrl: urlState.movieUrl || null
     });
   } else if (currentAppPanel === "settings") {
     window.currentSettingsSection = urlState.section || "";

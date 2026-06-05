@@ -9,19 +9,48 @@ const MoviesPanel = (() => {
   let lastList = null;
   let hlsInstance = null;
   let currentMovie = null;
+  let currentMovieUrl = null;
   /** @type {{ m3u8?: string, referer?: string, iframe_url?: string, title?: string } | null} */
   let currentStream = null;
   let movieSaveFolderId = null;
   let movieSaveFolderName = "";
 
   function getState() {
-    return { kind, page, q: searchQuery };
+    return { kind, page, q: searchQuery, movieUrl: currentMovieUrl };
   }
 
   function setState(s = {}) {
     if (s.kind) kind = s.kind;
     if (typeof s.page === "number" && s.page > 0) page = s.page;
     if (s.q !== undefined) searchQuery = s.q || "";
+    if (s.movieUrl) currentMovieUrl = s.movieUrl;
+  }
+
+  // Watch progress for resume (local only for now)
+  function getProgressKey(url) {
+    if (!url) return null;
+    return `td-movie-progress:${url}`;
+  }
+  function saveProgress(url, seconds) {
+    const key = getProgressKey(url);
+    if (!key || !seconds || seconds < 30) return;
+    try {
+      localStorage.setItem(key, seconds.toString());
+    } catch (e) {}
+  }
+  function loadProgress(url) {
+    const key = getProgressKey(url);
+    if (!key) return 0;
+    try {
+      const v = localStorage.getItem(key);
+      return v ? parseFloat(v) : 0;
+    } catch (e) { return 0; }
+  }
+  function clearProgress(url) {
+    const key = getProgressKey(url);
+    if (key) {
+      try { localStorage.removeItem(key); } catch(e){}
+    }
   }
 
   function show(el) {
@@ -150,6 +179,7 @@ const MoviesPanel = (() => {
     };
     video.addEventListener("error", onErr, { once: true });
     video.src = streamUrl;
+    attachVideoResume(video, currentMovieUrl);
     video.addEventListener(
       "loadedmetadata",
       () => {
@@ -191,6 +221,7 @@ const MoviesPanel = (() => {
 
     hlsInstance.loadSource(streamUrl);
     hlsInstance.attachMedia(video);
+    attachVideoResume(video, currentMovieUrl);
     bindHlsEvents(video, embedUrl, referer, rawM3u8, false, tryDirect);
     return true;
   }
@@ -227,12 +258,46 @@ const MoviesPanel = (() => {
     if (el) el.textContent = text || "";
   }
 
+  function attachVideoResume(video, movieUrl) {
+    if (!video || !movieUrl) return;
+    const saved = loadProgress(movieUrl);
+    if (saved > 30) {
+      const seekOnce = () => {
+        if (video.duration && saved < video.duration - 30) {
+          try { video.currentTime = saved; } catch(e){}
+        }
+        video.removeEventListener("loadedmetadata", seekOnce);
+      };
+      video.addEventListener("loadedmetadata", seekOnce, { once: true });
+    }
+
+    let saveT;
+    const doSave = () => {
+      if (video.currentTime > 30) {
+        saveProgress(movieUrl, video.currentTime);
+      }
+    };
+    video.addEventListener("timeupdate", () => {
+      if (saveT) clearTimeout(saveT);
+      saveT = setTimeout(doSave, 5000);
+    }, { passive: true });
+
+    video.addEventListener("pause", doSave);
+    video.addEventListener("ended", () => clearProgress(movieUrl));
+  }
+
   function showBrowse() {
     hide($("#movies-detail"));
     show($("#movies-browse"));
     hide($("#btn-movies-back"));
     hide($("#btn-movies-back-detail"));
     destroyPlayer();
+    // clear movie deep link when going back to list
+    currentMovieUrl = null;
+    currentMovie = null;
+    if (typeof window.syncAppState === "function") {
+      window.syncAppState();
+    }
   }
 
   function showDetailView() {
@@ -632,6 +697,10 @@ const MoviesPanel = (() => {
 
   async function openMovieDetail(url) {
     if (!url) return;
+    currentMovieUrl = url;
+    if (typeof window.syncAppState === "function") {
+      window.syncAppState();
+    }
     showDetailView();
     destroyPlayer();
     setPlayerStatus("Memuat detail…");
@@ -698,12 +767,19 @@ const MoviesPanel = (() => {
     if (initial) {
       setState(initial);
     }
-    // do not force reset here; state persists within session + restored from URL on refresh
-    showBrowse();
     const inp = $("#movie-search-input");
     if (inp) inp.value = searchQuery || "";
     syncTabs();
-    loadList();
+
+    const movieToOpen = currentMovieUrl || (initial && initial.movieUrl);
+    if (movieToOpen) {
+      // deep link to specific movie detail
+      openMovieDetail(movieToOpen);
+    } else {
+      // normal browse
+      showBrowse();
+      loadList();
+    }
   }
 
   function bind() {
