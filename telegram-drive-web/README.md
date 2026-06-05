@@ -34,17 +34,10 @@ Aplikasi web untuk mengelola file di Telegram lewat browser — upload, unduh, p
 ### UI / UX
 - Beberapa **tema** (default, ocean, dusk, light, retro, glass) — disimpan di `localStorage`
 - Sidebar mobile dengan animasi & backdrop
-- Modal notifikasi (sukses/gagal) tanpa auto-close — tombol **「Siap tuan!」**
 - Modal konfirmasi untuk aksi berbahaya
-
-### Donasi (admin)
-- Blok donasi di modal notifikasi: **QRIS** (gambar dari server) + link Saweria
-- **Pengaturan → Admin — QRIS donasi**: edit payload EMV, link Saweria, on/off tampilan
-- QR di-generate server-side (`/api/donation/qr`) — tidak bergantung CDN browser
 
 ### Admin (opsional)
 - Upload / tes cookies **yt-dlp** untuk YouTube (jika fitur import YouTube diaktifkan di deployment Anda)
-- Pengaturan QRIS donasi
 
 > Catatan: UI import YouTube/yt-dlp dapat disembunyikan di frontend; backend tetap mendukung jika cookies dikonfigurasi.
 
@@ -209,7 +202,7 @@ telegram-drive-web/
 │   ├── main.py              # API FastAPI
 │   ├── telegram_mgr.py      # Telethon
 │   ├── media_stream.py      # Preview/download + Range
-│   ├── donation_settings.py # QRIS admin
+│   ├── donation_settings.py
 │   ├── url_fetcher.py       # Import URL / GDrive
 │   └── user_store.py        # Akun aplikasi (SQLite)
 ├── frontend/static/         # UI (index.html, app.js, style.css)
@@ -241,8 +234,6 @@ telegram-drive-web/
 |----------|-----------|
 | `GET /health` | Status service |
 | `GET /api/config` | Konfigurasi publik |
-| `GET /api/donation/qr` | Gambar PNG QRIS |
-| `GET/POST/DELETE /api/admin/donation` | Pengaturan QRIS (admin) |
 
 Dokumentasi OpenAPI dinonaktifkan di production (`docs_url=None`).
 
