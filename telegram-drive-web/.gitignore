@@ -9,7 +9,8 @@ __pycache__/
 .env
 
 # Runtime data (session Telegram, akun, QRIS custom)
-data/sessions/
+data/sessions/*
+!data/sessions/.gitkeep
 data/users.db
 data/donation.json
 data/ytdlp/cookies.txt
