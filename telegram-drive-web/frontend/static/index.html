@@ -12,10 +12,10 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/themes.css?v=52">
-  <link rel="stylesheet" href="/static/style.css?v=52">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=52">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=52">
+  <link rel="stylesheet" href="/static/themes.css?v=53">
+  <link rel="stylesheet" href="/static/style.css?v=53">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=53">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=53">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -328,10 +328,8 @@
   <div id="modal-upload" class="modal hidden" aria-labelledby="modal-upload-title">
     <div class="modal-backdrop" data-close="modal-upload"></div>
     <div class="modal-card modal-panel modal-upload-card">
-      <div class="modal-upload-head">
-        <h3 id="modal-upload-title">Tambah file ke folder</h3>
-        <button type="button" class="modal-close-inline" data-close="modal-upload" aria-label="Tutup">×</button>
-      </div>
+      <button type="button" class="modal-close" data-close="modal-upload" aria-label="Tutup">×</button>
+      <h3 id="modal-upload-title" class="modal-upload-title">Tambah file ke folder</h3>
       <p class="hint upload-target">Tujuan: <span id="upload-target-name">Saved Messages</span></p>
 
       <div class="ingest-tabs" role="tablist">
@@ -368,10 +366,6 @@
         <button type="button" class="btn" id="btn-import-url">Unduh &amp; simpan ke Telegram</button>
         <div id="import-url-status" class="status-msg hidden"></div>
         <div id="import-url-error" class="error hidden"></div>
-      </div>
-
-      <div class="modal-actions modal-upload-footer">
-        <button type="button" class="btn ghost" data-close="modal-upload">Tutup</button>
       </div>
     </div>
   </div>
@@ -498,6 +492,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=52"></script>
+  <script src="/static/app.js?v=53"></script>
 </body>
 </html>
