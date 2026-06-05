@@ -1060,6 +1060,42 @@ function openFilePreview(folderId, file) {
       } catch (_) {
         showVideoError();
       }
+      // resume support for saved videos (incl after movie save to telegram)
+      if (vid) {
+        const progressKey = `drive-video-progress:${folderId}:${file.id || file.name}`;
+        const saved = parseFloat(localStorage.getItem(progressKey) || "0");
+        if (saved > 30) {
+          vid.addEventListener(
+            "loadedmetadata",
+            () => {
+              if (vid.duration && saved < vid.duration - 30) {
+                try {
+                  vid.currentTime = saved;
+                } catch (e) {}
+              }
+            },
+            { once: true }
+          );
+        }
+        let saveT;
+        const doSave = () => {
+          if (vid.currentTime > 30) {
+            localStorage.setItem(progressKey, vid.currentTime.toString());
+          }
+        };
+        vid.addEventListener(
+          "timeupdate",
+          () => {
+            if (saveT) clearTimeout(saveT);
+            saveT = setTimeout(doSave, 5000);
+          },
+          { passive: true }
+        );
+        vid.addEventListener("pause", doSave);
+        vid.addEventListener("ended", () => {
+          localStorage.removeItem(progressKey);
+        });
+      }
     }
   } else {
     box.innerHTML = `<img src="${url}" alt="${escapeHtml(file.name)}" loading="lazy">`;
