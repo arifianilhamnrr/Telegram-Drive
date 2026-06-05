@@ -12,10 +12,10 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/themes.css?v=51">
-  <link rel="stylesheet" href="/static/style.css?v=51">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=51">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=51">
+  <link rel="stylesheet" href="/static/themes.css?v=52">
+  <link rel="stylesheet" href="/static/style.css?v=52">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=52">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=52">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -149,8 +149,6 @@
         </div>
         <div class="topbar-actions" id="topbar-actions-drive">
           <button type="button" class="btn" id="btn-open-upload">Tambah file</button>
-          <button type="button" class="btn ghost" id="btn-open-import-url" title="Import dari link">Import link</button>
-          <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
         </div>
       </header>
 
@@ -158,10 +156,13 @@
         <section class="card files-card">
           <div class="files-head">
             <h3>File di folder</h3>
-            <label class="select-all-label">
-              <input type="checkbox" id="select-all-files">
-              <span>Pilih semua</span>
-            </label>
+            <div class="files-head-actions">
+              <button type="button" class="btn ghost sm" id="btn-refresh">Refresh</button>
+              <label class="select-all-label">
+                <input type="checkbox" id="select-all-files">
+                <span>Pilih semua</span>
+              </label>
+            </div>
           </div>
           <div class="files-toolbar">
             <div class="file-filters" role="tablist" aria-label="Filter jenis file">
@@ -497,6 +498,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=51"></script>
+  <script src="/static/app.js?v=52"></script>
 </body>
 </html>

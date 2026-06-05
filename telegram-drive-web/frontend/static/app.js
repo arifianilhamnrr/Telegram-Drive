@@ -2668,7 +2668,6 @@ $("#btn-import-url")?.addEventListener("click", async () => {
 });
 
 $("#btn-open-upload")?.addEventListener("click", () => openUploadModal("file"));
-$("#btn-open-import-url")?.addEventListener("click", () => openUploadModal("url"));
 
 $("#select-all-files")?.addEventListener("change", (e) => {
   const checked = e.target.checked;

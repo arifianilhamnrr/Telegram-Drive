@@ -522,12 +522,11 @@ button.brand-icon .brand-mark-close {
   white-space: nowrap;
 }
 
-@media (max-width: 400px) {
-  #btn-open-import-url {
-    padding-left: 0.55rem;
-    padding-right: 0.55rem;
-    font-size: 0.8rem;
-  }
+.files-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
 }
 
 .dropzone {
