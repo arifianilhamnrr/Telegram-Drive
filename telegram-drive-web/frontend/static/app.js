@@ -282,11 +282,19 @@ function renderThemePicker() {
 }
 
 async function api(path, opts = {}) {
+  let body = opts.body;
+  const isFormData = body instanceof FormData;
+  // Only stringify plain objects. If already a string (pre-serialized), use as-is.
+  if (body && !isFormData && typeof body !== "string") {
+    body = JSON.stringify(body);
+  }
+  const baseHeaders =
+    body && !isFormData ? { "Content-Type": "application/json" } : {};
   const res = await fetch(path, {
     credentials: "same-origin",
-    headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {},
+    headers: baseHeaders,
     ...opts,
-    body: opts.body && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body,
+    body,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -419,6 +427,7 @@ function transferPercentFromProgress(loaded, total, phase) {
 function transferDetailFromProgress(loaded, total, phase, message) {
   if (message) return message;
   if (phase === "telegram") return "Mengunggah ke Telegram…";
+  if (phase === "resolve") return "Menyiapkan stream…";
   if (total && total > 0) {
     const pct = Math.round((loaded / total) * 100);
     return `Mengunduh… ${formatSize(loaded)} / ${formatSize(total)} (${pct}%)`;
@@ -455,69 +464,92 @@ function xhrPostForm(url, formData, onProgress) {
   });
 }
 
-async function importUrlWithProgress(body) {
-  showTransferLoader("Import dari link", "Memulai unduhan…");
-  const res = await fetch("/api/import/url", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    hideTransferLoader();
-    const data = await res.json().catch(() => ({}));
-    throwApiError(data, res.statusText);
-  }
-  const reader = res.body?.getReader();
-  if (!reader) {
-    hideTransferLoader();
-    throw new Error("Browser tidak mendukung progress unduhan");
-  }
-  const decoder = new TextDecoder();
-  let buf = "";
-  let result = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const parts = buf.split("\n\n");
-    buf = parts.pop() || "";
-    for (const block of parts) {
-      const line = block.split("\n").find((l) => l.startsWith("data: "));
-      if (!line) continue;
-      let payload;
-      try {
-        payload = JSON.parse(line.slice(6));
-      } catch {
-        continue;
-      }
-      if (payload.event === "progress") {
-        const pct = transferPercentFromProgress(
-          payload.loaded,
-          payload.total,
-          payload.phase
-        );
-        const detail = transferDetailFromProgress(
-          payload.loaded,
-          payload.total,
-          payload.phase,
-          payload.message
-        );
-        updateTransferProgress(pct, detail, payload.phase);
-      } else if (payload.event === "done") {
-        result = payload;
-        updateTransferProgress(100, "Selesai.", payload.phase);
-      } else if (payload.event === "error") {
-        throw new Error(payload.message || "Import gagal");
+async function runSsePost(path, body, loaderTitle) {
+  showTransferLoader(loaderTitle, "Memulai…");
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throwApiError(data, res.statusText);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error("Browser tidak mendukung progress unduhan");
+    }
+    const decoder = new TextDecoder();
+    let buf = "";
+    let result = null;
+    let sawEnd = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || "";
+      for (const block of parts) {
+        const line = block.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        let payload;
+        try {
+          payload = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
+        if (payload.event === "progress") {
+          const pct = transferPercentFromProgress(
+            payload.loaded,
+            payload.total,
+            payload.phase
+          );
+          const detail = transferDetailFromProgress(
+            payload.loaded,
+            payload.total,
+            payload.phase,
+            payload.message
+          );
+          updateTransferProgress(pct, detail, payload.phase);
+        } else if (payload.event === "done") {
+          result = payload;
+          updateTransferProgress(100, "Selesai.", payload.phase);
+        } else if (payload.event === "error") {
+          updateTransferProgress(0, payload.message || "Gagal", payload.phase);
+          throw new Error(payload.message || "Gagal");
+        } else if (payload.event === "end") {
+          sawEnd = true;
+        }
       }
     }
+    if (!result?.ok) {
+      throw new Error(
+        sawEnd ? "Proses tidak selesai — coba lagi." : "Koneksi stream terputus."
+      );
+    }
+    return result;
+  } finally {
+    hideTransferLoader();
   }
-  if (!result?.ok) throw new Error("Import tidak selesai");
-  return result;
 }
+
+async function importUrlWithProgress(body) {
+  return runSsePost("/api/import/url", body, "Import dari link");
+}
+
+window.tdRunSsePost = runSsePost;
+window.tdHideTransferLoader = hideTransferLoader;
+window.tdGetCurrentFolderId = () => normalizeFolderId(currentFolderId);
+window.tdGetCurrentFolderName = () => currentFolderName;
+window.tdOpenModal = openModal;
+window.tdCloseModal = closeModal;
+window.tdShowConfirm = showConfirm;
+window.tdNormalizeFolderId = normalizeFolderId;
 
 function show(el) { el.classList.remove("hidden"); }
 function hide(el) { el.classList.add("hidden"); }
@@ -863,6 +895,8 @@ function showConfirm({ title, message, extraHtml, okLabel = "Ya, lanjutkan", dan
 }
 
 $("#confirm-ok")?.addEventListener("click", () => finishConfirm(true));
+
+$("#btn-transfer-cancel")?.addEventListener("click", () => hideTransferLoader());
 
 $$("[data-close]").forEach((el) => {
   el.addEventListener("click", () => {
@@ -1294,25 +1328,65 @@ async function refreshAdminDonationForm() {
   }
 }
 
+function formatLk21AdminStatus(data) {
+  const base = data?.base_url || "—";
+  const src = data?.source || "—";
+  const mode = data?.scrape_mode ? ` · mode ${data.scrape_mode}` : "";
+  const env = data?.env_override ? " · override .env" : "";
+  const auto = data?.auto_discover === false ? " · auto-discover off" : "";
+  return `Aktif: ${base} (sumber: ${src}${mode}${env}${auto})`;
+}
+
+async function refreshAdminLk21Form() {
+  const status = $("#admin-lk21-status");
+  const input = $("#admin-lk21-base-url");
+  const errBox = $("#admin-lk21-error");
+  const okBox = $("#admin-lk21-ok");
+  hide(errBox);
+  hide(okBox);
+  if (status) {
+    status.textContent = "Memuat domain LK21…";
+    status.classList.remove("is-bad");
+  }
+  try {
+    const data = await api("/api/admin/lk21");
+    if (status) status.textContent = formatLk21AdminStatus(data);
+    if (input && data.base_url) input.value = data.base_url;
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "Gagal memuat status LK21";
+      status.classList.add("is-bad");
+    }
+  }
+}
+
 async function refreshAdminSections() {
   const donationSec = $("#settings-admin-donation-section");
+  const lk21Sec = $("#settings-admin-lk21-section");
   const ytdlpSec = $("#settings-admin-section");
   if (!accountIsAdmin) {
     setAdminSectionVisible(donationSec, false);
+    setAdminSectionVisible(lk21Sec, false);
     setAdminSectionVisible(ytdlpSec, false);
     return;
   }
   setAdminSectionVisible(donationSec, true);
   await refreshAdminDonationForm();
+  setAdminSectionVisible(lk21Sec, true);
+  await refreshAdminLk21Form();
   setAdminSectionVisible(ytdlpSec, false);
 }
 
 function openSettingsPage() {
   renderThemePicker();
   refreshSettingsTelegramStatus();
-  refreshAdminSections();
+  void refreshAdminSections();
   const nameEl = $("#settings-account-name");
   if (nameEl) nameEl.textContent = accountUsername || "—";
+  if (accountIsAdmin) {
+    const hint = $("#settings-admin-hint");
+    if (hint) hint.classList.remove("hidden");
+  }
 }
 
 function updateYtdlpFileZoneLabel() {
@@ -1464,6 +1538,69 @@ $("#form-admin-donation")?.addEventListener("submit", async (e) => {
   }
 });
 
+$("#btn-admin-lk21-refresh")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-lk21-refresh");
+  const errBox = $("#admin-lk21-error");
+  const okBox = $("#admin-lk21-ok");
+  const status = $("#admin-lk21-status");
+  const input = $("#admin-lk21-base-url");
+  hide(errBox);
+  hide(okBox);
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/lk21/refresh-domain", { method: "POST" });
+    if (status) status.textContent = formatLk21AdminStatus(data);
+    if (input && data.base_url) input.value = data.base_url;
+    if (okBox) {
+      okBox.textContent = data.message || "Domain diperbarui.";
+      show(okBox);
+    }
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || "Gagal refresh domain";
+      show(errBox);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+$("#btn-admin-lk21-save")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-lk21-save");
+  const errBox = $("#admin-lk21-error");
+  const okBox = $("#admin-lk21-ok");
+  const status = $("#admin-lk21-status");
+  const baseUrl = ($("#admin-lk21-base-url")?.value || "").trim();
+  hide(errBox);
+  hide(okBox);
+  if (!baseUrl) {
+    if (errBox) {
+      errBox.textContent = "Isi URL domain LK21 terlebih dahulu.";
+      show(errBox);
+    }
+    return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/lk21", {
+      method: "POST",
+      body: { base_url: baseUrl },
+    });
+    if (status) status.textContent = formatLk21AdminStatus(data);
+    if (okBox) {
+      okBox.textContent = data.message || "Domain disimpan.";
+      show(okBox);
+    }
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || "Gagal menyimpan domain";
+      show(errBox);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 $("#btn-admin-donation-reset")?.addEventListener("click", async () => {
   const ok = await showConfirm({
     title: "Kembalikan QRIS default?",
@@ -1520,32 +1657,46 @@ $("#btn-open-change-password")?.addEventListener("click", () => {
 });
 
 function showAppPanel(panel) {
-  currentAppPanel = panel === "settings" ? "settings" : "drive";
+  const p = panel === "settings" || panel === "movies" ? panel : "drive";
+  currentAppPanel = p;
   const drivePanel = $("#panel-drive");
   const settingsPanel = $("#panel-settings");
+  const moviesPanel = $("#panel-movies");
   const foldersNav = $("#sidebar-folders");
-  const topbarActions = $("#topbar-actions-drive");
+  const topbarActionsDrive = $("#topbar-actions-drive");
+  const topbarActionsMovies = $("#topbar-actions-movies");
   const fileCount = $("#file-count");
 
   $$(".sidebar-menu-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.panel === currentAppPanel);
   });
 
+  hide(drivePanel);
+  hide(settingsPanel);
+  hide(moviesPanel);
+  hide(topbarActionsDrive);
+  hide(topbarActionsMovies);
+
   let activePanel = drivePanel;
   if (currentAppPanel === "settings") {
-    hide(drivePanel);
     show(settingsPanel);
     hide(foldersNav);
-    hide(topbarActions);
     $("#folder-title").textContent = "Pengaturan";
     if (fileCount) fileCount.textContent = "Tema, akun & Telegram";
     openSettingsPage();
     activePanel = settingsPanel;
+  } else if (currentAppPanel === "movies") {
+    show(moviesPanel);
+    hide(foldersNav);
+    show(topbarActionsMovies);
+    $("#folder-title").textContent = "Movie";
+    if (fileCount) fileCount.textContent = "Film LK21 (scrape + stream)";
+    window.MoviesPanel?.onShow?.();
+    activePanel = moviesPanel;
   } else {
     show(drivePanel);
-    hide(settingsPanel);
     show(foldersNav);
-    show(topbarActions);
+    show(topbarActionsDrive);
     setFolderHeader(currentFolderName);
     if (fileCount) updateFileCountLabel();
     activePanel = drivePanel;
@@ -2686,7 +2837,72 @@ const SHARE_VISIBILITY_LABELS = {
   preview: "Hanya lihat",
 };
 
+const SHARE_EXPIRY_LABELS = {
+  1: "1 jam",
+  6: "6 jam",
+  24: "24 jam",
+  72: "3 hari",
+  168: "7 hari",
+  720: "30 hari",
+};
+
 let shareModalContext = null;
+
+function formatShareExpiresAt(iso) {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return null;
+  }
+}
+
+function shareUploadExpirySelectHtml(id, selected = "24") {
+  const opts = Object.entries(SHARE_EXPIRY_LABELS)
+    .map(([v, label]) => `<option value="${v}"${v === String(selected) ? " selected" : ""}>${label}</option>`)
+    .join("");
+  return `<label for="${id}">Masa berlaku upload</label>
+    <select id="${id}" class="share-select">${opts}</select>`;
+}
+
+function syncShareUploadFormUI() {
+  const isFolder = shareModalContext?.shareType === "folder";
+  const block = $("#share-upload-block");
+  const uploadCb = $("#share-allow-upload");
+  const uploadExpiryWrap = $("#share-upload-expiry-wrap");
+  const generalExpiry = $("#share-expiry");
+  const generalLabel = $("#share-expiry-label");
+  if (!isFolder) {
+    hide(block);
+    if (uploadCb) uploadCb.checked = false;
+    hide(uploadExpiryWrap);
+    if (generalExpiry) generalExpiry.disabled = false;
+    if (generalLabel) generalLabel.textContent = "Masa berlaku link";
+    return;
+  }
+  show(block);
+  const uploadOn = !!uploadCb?.checked;
+  if (uploadOn) {
+    show(uploadExpiryWrap);
+    if (generalExpiry) {
+      generalExpiry.disabled = true;
+      generalExpiry.value = "";
+    }
+    if (generalLabel) generalLabel.textContent = "Masa berlaku link (nonaktif saat upload)";
+  } else {
+    hide(uploadExpiryWrap);
+    if (generalExpiry) generalExpiry.disabled = false;
+    if (generalLabel) generalLabel.textContent = "Masa berlaku link";
+  }
+}
 
 function openShareModal(ctx) {
   shareModalContext = ctx;
@@ -2697,6 +2913,10 @@ function openShareModal(ctx) {
         ? `File: ${ctx.name || "—"}`
         : `Folder: ${ctx.name || currentFolderName}`;
   }
+  const uploadCb = $("#share-allow-upload");
+  if (uploadCb) uploadCb.checked = false;
+  const uploadExp = $("#share-upload-expiry");
+  if (uploadExp) uploadExp.value = "24";
   hide($("#share-create-result"));
   hideError($("#share-error"));
   const pw = $("#share-password");
@@ -2704,10 +2924,16 @@ function openShareModal(ctx) {
   const vis = $("#share-visibility");
   if (vis) vis.value = "both";
   const exp = $("#share-expiry");
-  if (exp) exp.value = "";
+  if (exp) {
+    exp.value = "";
+    exp.disabled = false;
+  }
+  syncShareUploadFormUI();
   loadShareListForModal();
   openModal("modal-share");
 }
+
+$("#share-allow-upload")?.addEventListener("change", syncShareUploadFormUI);
 
 async function loadShareListForModal() {
   const box = $("#share-existing-list");
@@ -2737,17 +2963,25 @@ function renderShareExistingList(shares) {
   box.innerHTML = `<p class="hint share-existing-title">Link yang sudah ada</p>${shares
     .map((s) => {
       const off = !s.active;
+      const expLabel = formatShareExpiresAt(s.expires_at);
       const meta = [
         SHARE_VISIBILITY_LABELS[s.visibility] || s.visibility,
         s.has_password ? "🔒 password" : null,
+        s.share_type === "folder" && s.allow_upload ? "📤 upload" : null,
+        expLabel ? `s/d ${expLabel}` : "tanpa batas",
         off ? "nonaktif / kedaluwarsa" : null,
       ]
         .filter(Boolean)
         .join(" · ");
+      const uploadToggle =
+        s.share_type === "folder"
+          ? `<button type="button" class="btn ghost sm" data-toggle-upload="${s.id}" data-upload="${s.allow_upload ? "0" : "1"}">${s.allow_upload ? "Matikan upload" : "Izinkan upload"}</button>`
+          : "";
       return `<div class="share-existing-item${off ? " is-off" : ""}">
         <span class="share-existing-meta">${escapeHtml(meta)}</span>
         <div class="share-existing-actions">
           <button type="button" class="btn ghost sm" data-copy-url="${escapeHtml(s.url)}">Salin</button>
+          ${uploadToggle}
           <button type="button" class="btn ghost sm" data-toggle-share="${s.id}" data-enabled="${s.enabled ? "0" : "1"}">${s.enabled ? "Nonaktifkan" : "Aktifkan"}</button>
           <button type="button" class="btn danger sm ghost" data-del-share="${s.id}">Hapus</button>
         </div>
@@ -2779,6 +3013,38 @@ function renderShareExistingList(shares) {
         notifySuccess(enabled ? "Link diaktifkan." : "Link dinonaktifkan.");
       } catch (e) {
         notifyError(e.message);
+      }
+    };
+  });
+  box.querySelectorAll("[data-toggle-upload]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = parseInt(btn.dataset.toggleUpload, 10);
+      const allow_upload = btn.dataset.upload === "1";
+      let patchBody = { allow_upload };
+      if (allow_upload) {
+        const ok = await showConfirm({
+          title: "Izinkan upload pengunjung",
+          message: "Pilih berapa lama link upload berlaku. Setelah itu pengunjung tidak bisa upload lagi.",
+          extraHtml: shareUploadExpirySelectHtml("confirm-share-upload-expiry", "168"),
+          okLabel: "Aktifkan upload",
+        });
+        if (!ok) return;
+        const hours = parseInt($("#confirm-share-upload-expiry")?.value || "168", 10);
+        patchBody = { allow_upload: true, expires_in_hours: hours };
+      }
+      try {
+        await api(`/api/shares/${id}`, {
+          method: "PATCH",
+          body: patchBody,
+        });
+        await loadShareListForModal();
+        notifySuccess(allow_upload ? "Upload pengunjung diaktifkan." : "Upload pengunjung dimatikan.");
+      } catch (e) {
+        const msg =
+          e.message === "upload_wajib_masa_berlaku"
+            ? "Upload wajib punya masa berlaku — pilih durasi."
+            : e.message;
+        notifyError(msg);
       }
     };
   });
@@ -2816,7 +3082,17 @@ $("#form-create-share")?.addEventListener("submit", async (e) => {
   hideError($("#share-error"));
   const btn = $("#btn-create-share-submit");
   setBtnLoading(btn, true, "Membuat…");
-  const expiresVal = $("#share-expiry")?.value;
+  const uploadOn =
+    shareModalContext.shareType === "folder" && !!$("#share-allow-upload")?.checked;
+  let expiresVal = $("#share-expiry")?.value;
+  if (uploadOn) {
+    expiresVal = $("#share-upload-expiry")?.value || "";
+    if (!expiresVal) {
+      showError($("#share-error"), "Pilih masa berlaku link upload.");
+      setBtnLoading(btn, false, "");
+      return;
+    }
+  }
   const body = {
     share_type: shareModalContext.shareType,
     folder_id: shareModalContext.folderId,
@@ -2830,6 +3106,8 @@ $("#form-create-share")?.addEventListener("submit", async (e) => {
   };
   if (shareModalContext.shareType === "file") {
     body.message_id = shareModalContext.messageId;
+  } else if (uploadOn) {
+    body.allow_upload = true;
   }
   try {
     const data = await api("/api/shares", { method: "POST", body });
@@ -2842,7 +3120,11 @@ $("#form-create-share")?.addEventListener("submit", async (e) => {
     await loadShareListForModal();
     notifySuccess("Link share dibuat.");
   } catch (err) {
-    showError($("#share-error"), err.message);
+    const msg =
+      err.message === "upload_wajib_masa_berlaku"
+        ? "Link upload wajib punya masa berlaku — centang upload lalu pilih durasi."
+        : err.message;
+    showError($("#share-error"), msg);
   } finally {
     setBtnLoading(btn, false, "");
   }
