@@ -1746,6 +1746,7 @@ function showAppPanel(panel) {
   const drivePanel = $("#panel-drive");
   const settingsPanel = $("#panel-settings");
   const moviesPanel = $("#panel-movies");
+  const downloadsPanel = $("#panel-downloads");
   const foldersNav = $("#sidebar-folders");
   const topbarActionsDrive = $("#topbar-actions-drive");
   const topbarActionsMovies = $("#topbar-actions-movies");
@@ -1758,6 +1759,7 @@ function showAppPanel(panel) {
   hide(drivePanel);
   hide(settingsPanel);
   hide(moviesPanel);
+  hide(downloadsPanel);
   hide(topbarActionsDrive);
   hide(topbarActionsMovies);
 
@@ -1777,6 +1779,26 @@ function showAppPanel(panel) {
     if (fileCount) fileCount.textContent = "Film LK21 (scrape + stream)";
     window.MoviesPanel?.onShow?.();
     activePanel = moviesPanel;
+  } else if (currentAppPanel === "downloads") {
+    show(downloadsPanel);
+    hide(foldersNav);
+    hide(topbarActionsDrive);
+    hide(topbarActionsMovies);
+    $("#folder-title").textContent = "Downloads / Queue";
+    if (fileCount) fileCount.textContent = "Status unduhan & simpan movie ke Telegram";
+    loadMovieDownloads();
+    activePanel = downloadsPanel;
+    // simple poll while visible
+    if (!window._downloadsPoll) {
+      window._downloadsPoll = setInterval(() => {
+        if (currentAppPanel === "downloads") {
+          loadMovieDownloads();
+        } else {
+          clearInterval(window._downloadsPoll);
+          window._downloadsPoll = null;
+        }
+      }, 4000);
+    }
   } else {
     show(drivePanel);
     show(foldersNav);
@@ -2370,6 +2392,56 @@ function syncFileFilterButtons() {
   $$(".file-filter").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.fileFilter === filesFilter);
   });
+}
+
+async function loadMovieDownloads() {
+  const list = $("#downloads-list");
+  const empty = $("#downloads-empty");
+  if (!list || !empty) return;
+  try {
+    const data = await api("/api/movies/downloads");
+    const jobs = data.jobs || [];
+    if (jobs.length === 0) {
+      hide(list);
+      show(empty);
+      return;
+    }
+    hide(empty);
+    show(list);
+    list.innerHTML = jobs
+      .map((j) => {
+        const pct = j.total
+          ? Math.min(100, Math.round(((j.loaded || 0) / j.total) * 100))
+          : j.status === "done"
+          ? 100
+          : 0;
+        const sizeStr = j.total
+          ? `${formatSize(j.loaded || 0)} / ${formatSize(j.total)}`
+          : j.loaded
+          ? formatSize(j.loaded)
+          : "";
+        let statusHtml = `<span class="hint">${escapeHtml(j.phase || j.status || "")} ${j.message ? "— " + escapeHtml(j.message) : ""}</span>`;
+        if (j.error) {
+          statusHtml = `<span class="error" style="font-size:0.75rem;">${escapeHtml(j.error)}</span>`;
+        }
+        return `
+          <div class="download-job" style="border:1px solid var(--border);border-radius:8px;padding:0.5rem;margin-bottom:0.5rem;background:var(--surface2);">
+            <div style="font-weight:600;margin-bottom:0.25rem;">${escapeHtml(j.title)}</div>
+            <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;margin:0.25rem 0;">
+              <div style="height:100%;width:${pct}%;background:var(--accent);transition:width .3s;"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:0.75rem;">
+              <span>${pct}% ${sizeStr}</span>
+              <span class="${j.status === "error" ? "error" : ""}">${statusHtml}</span>
+            </div>
+            ${j.file ? `<div class="hint" style="font-size:0.7rem;margin-top:0.2rem;">✓ Tersimpan di Telegram</div>` : ""}
+          </div>
+        `;
+      })
+      .join("");
+  } catch (e) {
+    list.innerHTML = `<div class="error" style="font-size:0.8rem;">Gagal muat daftar downloads: ${escapeHtml(e.message || e)}</div>`;
+  }
 }
 
 function renderFileList(files, folderId, meta = {}) {

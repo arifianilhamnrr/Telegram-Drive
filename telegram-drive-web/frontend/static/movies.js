@@ -609,9 +609,6 @@ const MoviesPanel = (() => {
     const titleHint = $("#movie-save-film-title");
     if (titleHint) {
       let t = currentStream.title || currentMovie?.title || "Film";
-      if (currentStream.embedOnly && !currentStream.m3u8) {
-        t += " — hanya embed P2P (simpan ke Telegram tidak tersedia)";
-      }
       titleHint.textContent = t;
     }
     const list = $("#movie-save-folder-list");
@@ -654,18 +651,6 @@ const MoviesPanel = (() => {
       return;
     }
 
-    if (currentStream.embedOnly && !currentStream.m3u8) {
-      const msg =
-        "Mirror ini pakai player embed (P2P) — tidak bisa diunduh ke Telegram. " +
-        "Ubah domain di Admin → LK21 ke tvN.lk21official.cc dan pilih server TurboVIP.";
-      if (errBox) {
-        errBox.textContent = msg;
-        show(errBox);
-      }
-      notifyError(msg);
-      return;
-    }
-
     const folderName = movieSaveFolderName || "folder";
     const confirmFn = window.tdShowConfirm;
     const ok = confirmFn
@@ -699,6 +684,9 @@ const MoviesPanel = (() => {
       notifySuccess(
         `${r.file?.name || body.title} (${formatSize(r.bytes || 0)}) disimpan ke "${folderName}".`
       );
+      if (typeof loadMovieDownloads === "function") {
+        loadMovieDownloads();
+      }
     } catch (e) {
       if (typeof window.tdHideTransferLoader === "function") {
         window.tdHideTransferLoader();

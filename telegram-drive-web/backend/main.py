@@ -1,6 +1,8 @@
 import asyncio
 import json
 import secrets
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -60,10 +62,14 @@ from .ytdlp_fetcher import (
 from .donation_qr import build_donation_qr_png
 from .lk21_client import Lk21ApiError, list_movies, movie_detail, resolve_stream, search_movies
 from .movie_telegram_save import (
+    download_direct_to_temp,
     download_hls_to_temp,
     resolve_m3u8_for_save,
     sanitize_movie_filename,
 )
+
+MOVIE_SAVE_SEM = asyncio.Semaphore(1)
+MOVIE_SAVE_TASKS: dict[str, dict] = {}
 from .lk21_domain import discover_base_url, get_lk21_domain_status, set_lk21_base_manual
 from .lk21_hls_proxy import proxy_hls_request
 from .donation_settings import (
@@ -1077,61 +1083,122 @@ async def movies_lk21_save_to_telegram(
     body: MovieSaveTelegramBody,
     user: User = Depends(require_user),
 ):
+    job_id = str(uuid.uuid4())
+    MOVIE_SAVE_TASKS[job_id] = {
+        "id": job_id,
+        "user_id": user.id,
+        "title": (body.title or "film").strip(),
+        "status": "queued",
+        "phase": "queued",
+        "loaded": 0,
+        "total": None,
+        "message": "Dalam antrian (maks 1 proses aktif)...",
+        "created": time.time(),
+        "error": None,
+        "file": None,
+    }
+
     queue: asyncio.Queue = asyncio.Queue()
 
     async def worker() -> None:
         tmp_path = None
         try:
-            title = (body.title or "film").strip()
-
             await queue.put(
                 {
                     "event": "progress",
+                    "job_id": job_id,
+                    "phase": "queued",
+                    "message": "Dalam antrian (maks 1 proses aktif untuk hemat storage)...",
+                }
+            )
+            MOVIE_SAVE_TASKS[job_id].update({
+                "phase": "queued",
+                "message": "Dalam antrian...",
+                "status": "queued",
+            })
+
+            async with MOVIE_SAVE_SEM:
+                MOVIE_SAVE_TASKS[job_id].update({
+                    "status": "running",
                     "phase": "resolve",
                     "message": "Menyiapkan link stream…",
-                }
-            )
-            m3u8, referer = await resolve_m3u8_for_save(
-                m3u8=body.m3u8,
-                referer=body.referer,
-                iframe_url=body.iframe_url,
-                movie_url=body.movie_url,
-            )
-
-            await queue.put(
-                {
-                    "event": "progress",
-                    "phase": "download",
-                    "loaded": 0,
-                    "total": None,
-                    "message": "Mengunduh film (ffmpeg)…",
-                }
-            )
-
-            async def on_dl(loaded: int, total: Optional[int]) -> None:
+                })
                 await queue.put(
                     {
                         "event": "progress",
-                        "phase": "download",
-                        "loaded": loaded,
-                        "total": total,
+                        "job_id": job_id,
+                        "phase": "resolve",
+                        "message": "Menyiapkan link stream…",
                     }
                 )
 
-            filename = sanitize_movie_filename(title)
-            tmp_path, size = await download_hls_to_temp(
-                m3u8, referer, filename, on_progress=on_dl
-            )
+                title = (body.title or "film").strip()
+
+                source_url, referer = await resolve_m3u8_for_save(
+                    m3u8=body.m3u8,
+                    referer=body.referer,
+                    iframe_url=body.iframe_url,
+                    movie_url=body.movie_url,
+                )
+
+                await queue.put(
+                    {
+                        "event": "progress",
+                        "job_id": job_id,
+                        "phase": "download",
+                        "loaded": 0,
+                        "total": None,
+                        "message": "Mengunduh film…",
+                    }
+                )
+                MOVIE_SAVE_TASKS[job_id].update({
+                    "phase": "download",
+                    "message": "Mengunduh film…",
+                })
+
+                async def on_dl(loaded: int, total: Optional[int]) -> None:
+                    await queue.put(
+                        {
+                            "event": "progress",
+                            "job_id": job_id,
+                            "phase": "download",
+                            "loaded": loaded,
+                            "total": total,
+                        }
+                    )
+                    MOVIE_SAVE_TASKS[job_id].update({
+                        "phase": "download",
+                        "loaded": loaded,
+                        "total": total,
+                    })
+
+                filename = sanitize_movie_filename(title)
+                if str(source_url).lower().endswith((".mp4", ".mkv", ".webm", ".avi")) or "m3u8" not in str(source_url).lower():
+                    tmp_path, size = await download_direct_to_temp(
+                        source_url, referer, filename, on_progress=on_dl
+                    )
+                else:
+                    tmp_path, size = await download_hls_to_temp(
+                        source_url, referer, filename, on_progress=on_dl
+                    )
 
             await queue.put(
                 {
                     "event": "progress",
+                    "job_id": job_id,
                     "phase": "telegram",
                     "loaded": size,
                     "total": size,
                     "message": "Mengunggah ke Telegram…",
                 }
             )
+            MOVIE_SAVE_TASKS[job_id].update({
+                "phase": "telegram",
+                "loaded": size,
+                "total": size,
+                "message": "Mengunggah ke Telegram…",
+            })
+
             result = await mgr.upload_file_path(
                 user.telegram_sid,
                 body.folder_id,
@@ -1142,18 +1209,40 @@ async def movies_lk21_save_to_telegram(
             await queue.put(
                 {
                     "event": "done",
+                    "job_id": job_id,
                     "ok": True,
                     "file": result,
                     "bytes": size,
                     "folder_id": body.folder_id,
                 }
             )
+            MOVIE_SAVE_TASKS[job_id].update({
+                "status": "done",
+                "phase": "done",
+                "file": result,
+                "message": "Selesai. File lokal dihapus dari server.",
+            })
         except ValueError as e:
-            await queue.put({"event": "error", "message": str(e)})
+            await queue.put({"event": "error", "job_id": job_id, "message": str(e)})
+            MOVIE_SAVE_TASKS[job_id].update({
+                "status": "error",
+                "error": str(e),
+                "message": str(e),
+            })
         except Lk21ApiError as e:
-            await queue.put({"event": "error", "message": str(e)})
+            await queue.put({"event": "error", "job_id": job_id, "message": str(e)})
+            MOVIE_SAVE_TASKS[job_id].update({
+                "status": "error",
+                "error": str(e),
+                "message": str(e),
+            })
         except Exception as e:
-            await queue.put({"event": "error", "message": f"Gagal menyimpan film: {e}"})
+            await queue.put({"event": "error", "job_id": job_id, "message": f"Gagal menyimpan film: {e}"})
+            MOVIE_SAVE_TASKS[job_id].update({
+                "status": "error",
+                "error": f"Gagal menyimpan film: {e}",
+                "message": str(e),
+            })
         finally:
             if tmp_path:
                 from pathlib import Path
@@ -1183,6 +1272,39 @@ async def movies_lk21_save_to_telegram(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/movies/downloads")
+async def list_movie_downloads(user: User = Depends(require_user)):
+    """List recent/ongoing movie save jobs for the user (for Downloads menu)."""
+    user_jobs = []
+    now = time.time()
+    to_remove = []
+    for jid, j in list(MOVIE_SAVE_TASKS.items()):
+        if j.get("user_id") != user.id:
+            continue
+        # auto cleanup old done/error after 7 days
+        if j.get("status") in ("done", "error") and now - j.get("created", 0) > 86400 * 7:
+            to_remove.append(jid)
+            continue
+        user_jobs.append(
+            {
+                "id": jid,
+                "title": j.get("title", "film"),
+                "status": j.get("status", "unknown"),
+                "phase": j.get("phase", ""),
+                "loaded": j.get("loaded", 0),
+                "total": j.get("total"),
+                "message": j.get("message", ""),
+                "error": j.get("error"),
+                "created": j.get("created"),
+                "file": j.get("file"),
+            }
+        )
+    for jid in to_remove:
+        MOVIE_SAVE_TASKS.pop(jid, None)
+    user_jobs.sort(key=lambda x: x.get("created", 0), reverse=True)
+    return {"ok": True, "jobs": user_jobs[:50]}
 
 
 @app.post("/api/shares")

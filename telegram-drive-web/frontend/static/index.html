@@ -13,10 +13,10 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/themes.css?v=67">
-  <link rel="stylesheet" href="/static/style.css?v=77">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=77">
+  <link rel="stylesheet" href="/static/style.css?v=78">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=78">
   <link rel="stylesheet" href="/static/theme-glass.css?v=67">
-  <link rel="stylesheet" href="/static/movies.css?v=77">
+  <link rel="stylesheet" href="/static/movies.css?v=78">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -122,6 +122,10 @@
           <button type="button" class="sidebar-menu-item" data-panel="movies" id="nav-movies">
             <span class="sidebar-menu-icon">🎬</span>
             <span>Movie</span>
+          </button>
+          <button type="button" class="sidebar-menu-item" data-panel="downloads" id="nav-downloads">
+            <span class="sidebar-menu-icon">⬇</span>
+            <span>Downloads</span>
           </button>
           <button type="button" class="sidebar-menu-item" data-panel="settings" id="nav-settings">
             <span class="sidebar-menu-icon">⚙</span>
@@ -237,7 +241,7 @@
                 <button type="button" class="btn sm" id="btn-movie-save-telegram" disabled>
                   Simpan ke Telegram
                 </button>
-                <p class="hint movies-save-hint">Simpan ke Telegram butuh stream HLS (TurboVIP). Mirror WP biasanya embed P2P saja.</p>
+                <p class="hint movies-save-hint">Server akan unduh film (HLS atau P2P/embed) lalu upload ke Telegram. Proses background, lihat menu Downloads untuk status & progress.</p>
               </div>
             </div>
           </div>
@@ -246,6 +250,15 @@
             <iframe id="movie-player-embed" class="movies-player-embed hidden" title="Pemutar film" allow="autoplay; fullscreen; encrypted-media" referrerpolicy="no-referrer-when-downgrade"></iframe>
             <p id="movie-player-status" class="hint movies-player-status">Pilih server untuk mulai menonton.</p>
           </div>
+        </section>
+      </div>
+
+      <div id="panel-downloads" class="app-panel content scroll-area hidden">
+        <section class="card">
+          <h3>⬇ Downloads & Movie Queue</h3>
+          <p class="hint">Proses unduh & simpan film ke Telegram berjalan di background (maks 1 aktif bersamaan untuk jaga storage server). File lokal dihapus otomatis setelah upload sukses ke Telegram Anda.</p>
+          <div id="downloads-list"></div>
+          <div id="downloads-empty" class="hint" style="padding: 1rem 0;">Belum ada riwayat unduhan atau queue movie.</div>
         </section>
       </div>
 
@@ -652,7 +665,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js" crossorigin="anonymous"></script>
-  <script src="/static/app.js?v=77"></script>
-  <script src="/static/movies.js?v=77"></script>
+  <script src="/static/app.js?v=78"></script>
+  <script src="/static/movies.js?v=78"></script>
 </body>
 </html>
