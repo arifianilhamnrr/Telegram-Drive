@@ -2237,6 +2237,19 @@ function buildPaginationHtml(page, pages, isMobile = false) {
   return `<div class="files-pagination-inner">${parts.join("")}</div>`;
 }
 
+// Re-render pagination on resize so mobile/desktop number display + icons update
+let paginationResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(paginationResizeTimer);
+  paginationResizeTimer = setTimeout(() => {
+    const pag = $("#files-pagination-bottom");
+    if (pag && !pag.classList.contains("hidden") && pag.innerHTML) {
+      // only if currently shown
+      renderFilesPagination();
+    }
+  }, 150);
+});
+
 function syncFileFilterButtons() {
   $$(".file-filter").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.fileFilter === filesFilter);
