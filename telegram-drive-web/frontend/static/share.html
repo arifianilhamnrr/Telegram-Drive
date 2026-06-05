@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Telegram Drive — Share</title>
+  <link rel="stylesheet" href="/static/themes.css?v=54">
+  <link rel="stylesheet" href="/static/style.css?v=54">
+  <link rel="stylesheet" href="/static/share.css?v=54">
+</head>
+<body class="share-page-body">
+  <div class="share-page">
+    <header class="share-header">
+      <a class="share-brand" href="/">Telegram Drive</a>
+      <p class="hint share-header-hint">Tautan publik — tanpa login</p>
+    </header>
+
+    <main class="share-main card">
+      <div id="share-loading" class="share-state">Memuat…</div>
+      <div id="share-error-state" class="share-state error hidden"></div>
+      <div id="share-expired" class="share-state hidden">
+        <h2>Link tidak tersedia</h2>
+        <p class="hint">Link kedaluwarsa, dinonaktifkan, atau tidak ditemukan.</p>
+      </div>
+
+      <div id="share-password-panel" class="hidden">
+        <h2 id="share-password-title">Link dilindungi password</h2>
+        <p class="hint">Masukkan password yang diberikan pemilik link.</p>
+        <form id="form-share-password" class="share-password-form">
+          <input type="password" id="share-password-input" placeholder="Password" required autocomplete="current-password">
+          <button type="submit" class="btn">Buka</button>
+        </form>
+        <p id="share-password-error" class="error hidden"></p>
+      </div>
+
+      <div id="share-content" class="hidden">
+        <h1 id="share-title" class="share-title">Folder</h1>
+        <p id="share-visibility-hint" class="hint share-visibility-hint"></p>
+        <div id="share-files-empty" class="empty hidden">Tidak ada file.</div>
+        <div id="share-files-grid" class="share-file-grid hidden"></div>
+        <div id="share-pagination" class="files-pagination hidden"></div>
+      </div>
+    </main>
+  </div>
+
+  <div id="modal-share-preview" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-share-preview"></div>
+    <div class="modal-preview-body modal-panel share-preview-body">
+      <button type="button" class="modal-close modal-close-media" data-close="modal-share-preview" aria-label="Tutup">×</button>
+      <div id="share-preview-content" class="modal-preview-content"></div>
+      <div class="share-preview-actions">
+        <a id="share-preview-download" class="btn ghost sm" href="#" download>Download</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/share.js?v=54"></script>
+</body>
+</html>

@@ -12,10 +12,10 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/themes.css?v=53">
-  <link rel="stylesheet" href="/static/style.css?v=53">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=53">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=53">
+  <link rel="stylesheet" href="/static/themes.css?v=54">
+  <link rel="stylesheet" href="/static/style.css?v=54">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=54">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=54">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -157,6 +157,7 @@
           <div class="files-head">
             <h3>File di folder</h3>
             <div class="files-head-actions">
+              <button type="button" class="btn ghost sm" id="btn-share-folder" title="Bagikan folder">Bagikan</button>
               <button type="button" class="btn ghost sm" id="btn-refresh">Refresh</button>
               <label class="select-all-label">
                 <input type="checkbox" id="select-all-files">
@@ -370,6 +371,43 @@
     </div>
   </div>
 
+  <div id="modal-share" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-share"></div>
+    <div class="modal-card modal-panel modal-share-card">
+      <button type="button" class="modal-close" data-close="modal-share" aria-label="Tutup">×</button>
+      <h3>Bagikan link publik</h3>
+      <p class="hint" id="share-target-label">—</p>
+      <p class="sub share-sub-hint">Siapa pun dengan link bisa akses tanpa login. Atur visibilitas di bawah.</p>
+      <div id="share-existing-list" class="share-existing-list hidden"></div>
+      <form id="form-create-share" class="share-create-form">
+        <label for="share-visibility">Visibilitas</label>
+        <select id="share-visibility" class="share-select">
+          <option value="both">Lihat &amp; unduh</option>
+          <option value="download">Hanya unduh</option>
+          <option value="preview">Hanya lihat / pratinjau</option>
+        </select>
+        <label for="share-password">Password link <span class="hint">(opsional)</span></label>
+        <input type="password" id="share-password" autocomplete="new-password" placeholder="Kosongkan jika tidak perlu">
+        <label for="share-expiry">Masa berlaku</label>
+        <select id="share-expiry" class="share-select">
+          <option value="">Tanpa batas</option>
+          <option value="24">24 jam</option>
+          <option value="168">7 hari</option>
+          <option value="720">30 hari</option>
+        </select>
+        <button type="submit" class="btn" id="btn-create-share-submit">Buat link baru</button>
+      </form>
+      <div id="share-create-result" class="share-create-result hidden">
+        <label>Link publik</label>
+        <div class="share-url-row">
+          <input type="text" id="share-url-input" class="share-url-input" readonly>
+          <button type="button" class="btn sm" id="btn-copy-share-url">Salin</button>
+        </div>
+      </div>
+      <div id="share-error" class="error hidden"></div>
+    </div>
+  </div>
+
   <div id="modal-folder" class="modal hidden">
     <div class="modal-backdrop" data-close="modal-folder"></div>
     <div class="modal-card modal-panel">
@@ -492,6 +530,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=53"></script>
+  <script src="/static/app.js?v=54"></script>
 </body>
 </html>

@@ -16,6 +16,7 @@ MAX_BULK_ZIP_BYTES = MAX_BULK_ZIP_MB * 1024 * 1024
 COOKIE_NAME = "td_sid"
 USER_COOKIE = "td_account"
 GATE_COOKIE = "td_gate"
+SHARE_ACCESS_COOKIE = "td_share_access"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
 USERS_DB = DATA_DIR / "users.db"
 ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "true").strip().lower() in ("1", "true", "yes")

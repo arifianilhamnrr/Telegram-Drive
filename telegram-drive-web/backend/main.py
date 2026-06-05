@@ -3,7 +3,7 @@ import json
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import httpx
 from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -18,6 +18,7 @@ from .config import (
     GATE_COOKIE,
     MAX_UPLOAD_BYTES,
     SESSION_MAX_AGE,
+    SHARE_ACCESS_COOKIE,
     STATIC_DIR,
     USER_COOKIE,
     USERS_DB,
@@ -51,13 +52,31 @@ from .donation_settings import (
     reset_donation_settings,
     save_donation_settings,
 )
+from .share_access import (
+    assert_share_active,
+    check_share_file_target,
+    parse_share_access_cookie,
+    require_share_unlocked,
+    resolve_share_owner,
+    share_access_cookie,
+    share_to_owner_dict,
+    share_to_public_dict,
+    visibility_allows_download,
+    visibility_allows_preview,
+)
+from .share_store import ShareStore
 from .user_store import User, UserStore
+
+
+def get_share_store(request: Request) -> ShareStore:
+    return request.app.state.share_store
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store = UserStore(USERS_DB)
     app.state.user_store = store
+    app.state.share_store = ShareStore(USERS_DB)
     if store.count_users() == 0:
         admin_user = (ADMIN_USERNAME or "admin").strip().lower()
         admin_pass = ADMIN_PASSWORD or "TelegramDrive2026!"
@@ -150,6 +169,30 @@ class AdminDonationBody(BaseModel):
     qris_payload: str = Field(min_length=20, max_length=2000)
     saweria_url: str = Field(min_length=8, max_length=500)
     enabled: bool = True
+
+
+class ShareCreateBody(BaseModel):
+    share_type: Literal["file", "folder"]
+    folder_id: int = 0
+    message_id: Optional[int] = None
+    visibility: str = "both"
+    password: Optional[str] = None
+    expires_in_hours: Optional[int] = None
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class ShareUpdateBody(BaseModel):
+    visibility: Optional[str] = None
+    enabled: Optional[bool] = None
+    password: Optional[str] = None
+    clear_password: bool = False
+    expires_in_hours: Optional[int] = None
+    clear_expiry: bool = False
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class SharePasswordBody(BaseModel):
+    password: str = Field(min_length=1)
 
 
 @app.get("/health")
@@ -752,6 +795,290 @@ async def delete_file(folder_id: int, message_id: int, user: User = Depends(requ
     except Exception as e:
         raise HTTPException(502, str(e)) from e
     return {"ok": True}
+
+
+def _share_base_url(request: Request) -> str:
+    return str(request.base_url).rstrip("/")
+
+
+async def _load_public_share(
+    token: str,
+    share_store: ShareStore,
+    user_store: UserStore,
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share = share_store.get_by_token(token)
+    if not share:
+        raise HTTPException(404, "share_not_found")
+    assert_share_active(share_store, share)
+    require_share_unlocked(share, td_share_access)
+    owner = await resolve_share_owner(share, user_store)
+    return share, owner
+
+
+@app.post("/api/shares")
+async def create_share(
+    body: ShareCreateBody,
+    request: Request,
+    user: User = Depends(require_user),
+    share_store: ShareStore = Depends(get_share_store),
+):
+    try:
+        share = share_store.create(
+            user_id=user.id,
+            share_type=body.share_type,
+            folder_id=body.folder_id,
+            message_id=body.message_id,
+            visibility=body.visibility,
+            password=body.password,
+            expires_in_hours=body.expires_in_hours,
+            title=body.title,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "ok": True,
+        "share": share_to_owner_dict(share, share_store, _share_base_url(request)),
+    }
+
+
+@app.get("/api/shares")
+async def list_shares(
+    request: Request,
+    folder_id: Optional[int] = None,
+    message_id: Optional[int] = None,
+    user: User = Depends(require_user),
+    share_store: ShareStore = Depends(get_share_store),
+):
+    if folder_id is not None:
+        shares = share_store.list_for_target(user.id, folder_id, message_id)
+    else:
+        shares = share_store.list_for_user(user.id)
+    base = _share_base_url(request)
+    return {
+        "ok": True,
+        "shares": [share_to_owner_dict(s, share_store, base) for s in shares],
+    }
+
+
+@app.patch("/api/shares/{share_id}")
+async def update_share(
+    share_id: int,
+    body: ShareUpdateBody,
+    request: Request,
+    user: User = Depends(require_user),
+    share_store: ShareStore = Depends(get_share_store),
+):
+    try:
+        share = share_store.update(
+            share_id,
+            user.id,
+            visibility=body.visibility,
+            enabled=body.enabled,
+            password=body.password,
+            clear_password=body.clear_password,
+            expires_in_hours=body.expires_in_hours,
+            clear_expiry=body.clear_expiry,
+            title=body.title,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg == "share_not_found":
+            raise HTTPException(404, msg) from e
+        raise HTTPException(400, msg) from e
+    return {
+        "ok": True,
+        "share": share_to_owner_dict(share, share_store, _share_base_url(request)),
+    }
+
+
+@app.delete("/api/shares/{share_id}")
+async def delete_share(
+    share_id: int,
+    user: User = Depends(require_user),
+    share_store: ShareStore = Depends(get_share_store),
+):
+    if not share_store.delete(share_id, user.id):
+        raise HTTPException(404, "share_not_found")
+    return {"ok": True, "message": "Link share dihapus"}
+
+
+@app.get("/s/{token}", response_class=HTMLResponse)
+async def share_page(token: str):
+    path = STATIC_DIR / "share.html"
+    if not path.is_file():
+        raise HTTPException(404, "share_page_missing")
+    return FileResponse(path)
+
+
+@app.get("/api/public/s/{token}")
+async def public_share_info(
+    token: str,
+    share_store: ShareStore = Depends(get_share_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share = share_store.get_by_token(token)
+    if not share:
+        raise HTTPException(404, "share_not_found")
+    if not share_store.is_active(share):
+        raise HTTPException(410, "share_expired_or_disabled")
+    unlocked = not share.password_hash or parse_share_access_cookie(token, td_share_access)
+    return {
+        "ok": True,
+        **share_to_public_dict(share, password_required=bool(share.password_hash) and not unlocked),
+    }
+
+
+@app.post("/api/public/s/{token}/unlock")
+async def public_share_unlock(
+    token: str,
+    body: SharePasswordBody,
+    share_store: ShareStore = Depends(get_share_store),
+):
+    share = share_store.get_by_token(token)
+    if not share:
+        raise HTTPException(404, "share_not_found")
+    if not share_store.is_active(share):
+        raise HTTPException(410, "share_expired_or_disabled")
+    if not share.password_hash:
+        return {"ok": True, "unlocked": True}
+    if not share_store.verify_share_password(share, body.password):
+        raise HTTPException(403, "share_password_invalid")
+    resp = JSONResponse({"ok": True, "unlocked": True})
+    resp.set_cookie(
+        SHARE_ACCESS_COOKIE,
+        share_access_cookie(share),
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+    return resp
+
+
+@app.get("/api/public/s/{token}/files")
+async def public_share_files(
+    token: str,
+    filter: str = "all",
+    q: str = "",
+    page: int = 1,
+    per_page: int = 24,
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    if not visibility_allows_preview(share.visibility):
+        raise HTTPException(403, "share_preview_disabled")
+    try:
+        if share.share_type == "file" and share.message_id:
+            name, mime, size = await mgr.get_download_meta(
+                owner.telegram_sid, share.folder_id, share.message_id
+            )
+            entry = {
+                "id": share.message_id,
+                "name": name,
+                "size": size,
+                "sizeStr": None,
+                "mime": mime,
+                "previewable": preview_inline_allowed(mime, name),
+                "folder_id": share.folder_id,
+            }
+            return {
+                "files": [entry],
+                "total": 1,
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "filter": "all",
+                "q": "",
+                "share_type": "file",
+            }
+        result = await mgr.list_files(
+            owner.telegram_sid,
+            share.folder_id,
+            filter_type=filter,
+            q=q,
+            page=page,
+            per_page=per_page,
+        )
+        result["share_type"] = "folder"
+        return result
+    except ValueError:
+        raise HTTPException(401, "telegram_unavailable") from None
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/public/s/{token}/preview/{message_id}")
+async def public_share_preview(
+    token: str,
+    message_id: int,
+    request: Request,
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    if not visibility_allows_preview(share.visibility):
+        raise HTTPException(403, "share_preview_disabled")
+    check_share_file_target(share, message_id)
+    try:
+        name, mime, size = await mgr.get_download_meta(
+            owner.telegram_sid, share.folder_id, message_id
+        )
+    except ValueError as e:
+        if str(e) == "file_not_found":
+            raise HTTPException(404, "file_not_found") from e
+        raise HTTPException(401, "telegram_unavailable") from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+    if not preview_inline_allowed(mime, name):
+        raise HTTPException(415, "preview_not_available")
+    sid = owner.telegram_sid
+
+    def stream_at(offset: int, byte_limit: Optional[int]):
+        return mgr.iter_download_bytes(
+            sid, share.folder_id, message_id, offset=offset, byte_limit=byte_limit
+        )
+
+    return await build_media_response(
+        request, filename=name, mime=mime, size=size, stream_factory=stream_at, inline=True
+    )
+
+
+@app.get("/api/public/s/{token}/download/{message_id}")
+async def public_share_download(
+    token: str,
+    message_id: int,
+    request: Request,
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    if not visibility_allows_download(share.visibility):
+        raise HTTPException(403, "share_download_disabled")
+    check_share_file_target(share, message_id)
+    try:
+        name, mime, size = await mgr.get_download_meta(
+            owner.telegram_sid, share.folder_id, message_id
+        )
+    except ValueError as e:
+        if str(e) == "file_not_found":
+            raise HTTPException(404, "file_not_found") from e
+        raise HTTPException(401, "telegram_unavailable") from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+    sid = owner.telegram_sid
+
+    def stream_at(offset: int, byte_limit: Optional[int]):
+        return mgr.iter_download_bytes(
+            sid, share.folder_id, message_id, offset=offset, byte_limit=byte_limit
+        )
+
+    return await build_media_response(
+        request, filename=name, mime=mime, size=size, stream_factory=stream_at, inline=False
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

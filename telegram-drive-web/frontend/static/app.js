@@ -2123,6 +2123,7 @@ function renderFileList(files, folderId, meta = {}) {
           </div>
         </div>
         <div class="file-card-actions">
+          <button type="button" class="btn ghost sm share-file-btn" data-share-id="${f.id}" data-share-name="${escapeHtml(f.name)}">Bagikan</button>
           <a class="btn ghost sm" href="/api/download/${folderId}/${f.id}" download>Download</a>
           <button type="button" class="btn danger sm del" data-id="${f.id}">Hapus</button>
         </div>`;
@@ -2145,6 +2146,16 @@ function renderFileList(files, folderId, meta = {}) {
     };
   };
   grid.querySelectorAll("[data-preview-id]").forEach(openPreviewHandler);
+  grid.querySelectorAll(".share-file-btn").forEach((btn) => {
+    btn.onclick = () => {
+      openShareModal({
+        shareType: "file",
+        folderId,
+        messageId: parseInt(btn.dataset.shareId, 10),
+        name: btn.dataset.shareName || "file",
+      });
+    };
+  });
   grid.querySelectorAll(".del").forEach((btn) => {
     btn.onclick = async () => {
       const name = btn.dataset.name || "file ini";
@@ -2668,6 +2679,185 @@ $("#btn-import-url")?.addEventListener("click", async () => {
 });
 
 $("#btn-open-upload")?.addEventListener("click", () => openUploadModal("file"));
+
+const SHARE_VISIBILITY_LABELS = {
+  both: "Lihat & unduh",
+  download: "Hanya unduh",
+  preview: "Hanya lihat",
+};
+
+let shareModalContext = null;
+
+function openShareModal(ctx) {
+  shareModalContext = ctx;
+  const label = $("#share-target-label");
+  if (label) {
+    label.textContent =
+      ctx.shareType === "file"
+        ? `File: ${ctx.name || "—"}`
+        : `Folder: ${ctx.name || currentFolderName}`;
+  }
+  hide($("#share-create-result"));
+  hideError($("#share-error"));
+  const pw = $("#share-password");
+  if (pw) pw.value = "";
+  const vis = $("#share-visibility");
+  if (vis) vis.value = "both";
+  const exp = $("#share-expiry");
+  if (exp) exp.value = "";
+  loadShareListForModal();
+  openModal("modal-share");
+}
+
+async function loadShareListForModal() {
+  const box = $("#share-existing-list");
+  if (!box || !shareModalContext) return;
+  try {
+    const params = new URLSearchParams({
+      folder_id: String(shareModalContext.folderId),
+    });
+    if (shareModalContext.shareType === "file" && shareModalContext.messageId) {
+      params.set("message_id", String(shareModalContext.messageId));
+    }
+    const data = await api(`/api/shares?${params}`);
+    renderShareExistingList(data.shares || []);
+  } catch {
+    hide(box);
+  }
+}
+
+function renderShareExistingList(shares) {
+  const box = $("#share-existing-list");
+  if (!box) return;
+  if (!shares.length) {
+    hide(box);
+    return;
+  }
+  show(box);
+  box.innerHTML = `<p class="hint share-existing-title">Link yang sudah ada</p>${shares
+    .map((s) => {
+      const off = !s.active;
+      const meta = [
+        SHARE_VISIBILITY_LABELS[s.visibility] || s.visibility,
+        s.has_password ? "🔒 password" : null,
+        off ? "nonaktif / kedaluwarsa" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="share-existing-item${off ? " is-off" : ""}">
+        <span class="share-existing-meta">${escapeHtml(meta)}</span>
+        <div class="share-existing-actions">
+          <button type="button" class="btn ghost sm" data-copy-url="${escapeHtml(s.url)}">Salin</button>
+          <button type="button" class="btn ghost sm" data-toggle-share="${s.id}" data-enabled="${s.enabled ? "0" : "1"}">${s.enabled ? "Nonaktifkan" : "Aktifkan"}</button>
+          <button type="button" class="btn danger sm ghost" data-del-share="${s.id}">Hapus</button>
+        </div>
+      </div>`;
+    })
+    .join("")}`;
+
+  box.querySelectorAll("[data-copy-url]").forEach((btn) => {
+    btn.onclick = async () => {
+      const url = btn.getAttribute("data-copy-url");
+      try {
+        await navigator.clipboard.writeText(url);
+        notifySuccess("Link disalin.");
+      } catch {
+        notifyError("Gagal menyalin — salin manual dari kotak link.");
+      }
+    };
+  });
+  box.querySelectorAll("[data-toggle-share]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = parseInt(btn.dataset.toggleShare, 10);
+      const enabled = btn.dataset.enabled === "1";
+      try {
+        await api(`/api/shares/${id}`, {
+          method: "PATCH",
+          body: { enabled },
+        });
+        await loadShareListForModal();
+        notifySuccess(enabled ? "Link diaktifkan." : "Link dinonaktifkan.");
+      } catch (e) {
+        notifyError(e.message);
+      }
+    };
+  });
+  box.querySelectorAll("[data-del-share]").forEach((btn) => {
+    btn.onclick = async () => {
+      const ok = await showConfirm({
+        title: "Hapus link share?",
+        message: "Link tidak bisa dipakai lagi setelah dihapus.",
+        okLabel: "Ya, hapus",
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api(`/api/shares/${btn.dataset.delShare}`, { method: "DELETE" });
+        await loadShareListForModal();
+        notifySuccess("Link share dihapus.");
+      } catch (e) {
+        notifyError(e.message);
+      }
+    };
+  });
+}
+
+$("#btn-share-folder")?.addEventListener("click", () => {
+  openShareModal({
+    shareType: "folder",
+    folderId: currentFolderId,
+    name: currentFolderName,
+  });
+});
+
+$("#form-create-share")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!shareModalContext) return;
+  hideError($("#share-error"));
+  const btn = $("#btn-create-share-submit");
+  setBtnLoading(btn, true, "Membuat…");
+  const expiresVal = $("#share-expiry")?.value;
+  const body = {
+    share_type: shareModalContext.shareType,
+    folder_id: shareModalContext.folderId,
+    visibility: $("#share-visibility")?.value || "both",
+    password: $("#share-password")?.value?.trim() || null,
+    expires_in_hours: expiresVal ? parseInt(expiresVal, 10) : null,
+    title:
+      shareModalContext.shareType === "file"
+        ? shareModalContext.name
+        : shareModalContext.name || currentFolderName,
+  };
+  if (shareModalContext.shareType === "file") {
+    body.message_id = shareModalContext.messageId;
+  }
+  try {
+    const data = await api("/api/shares", { method: "POST", body });
+    const url = data.share?.url;
+    if (url) {
+      const input = $("#share-url-input");
+      if (input) input.value = url;
+      show($("#share-create-result"));
+    }
+    await loadShareListForModal();
+    notifySuccess("Link share dibuat.");
+  } catch (err) {
+    showError($("#share-error"), err.message);
+  } finally {
+    setBtnLoading(btn, false, "");
+  }
+});
+
+$("#btn-copy-share-url")?.addEventListener("click", async () => {
+  const url = $("#share-url-input")?.value;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    notifySuccess("Link disalin.");
+  } catch {
+    notifyError("Gagal menyalin.");
+  }
+});
 
 $("#select-all-files")?.addEventListener("change", (e) => {
   const checked = e.target.checked;

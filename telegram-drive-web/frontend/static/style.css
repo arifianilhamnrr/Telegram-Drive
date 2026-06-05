@@ -500,6 +500,101 @@ button.brand-icon .brand-mark-close {
   flex-wrap: wrap;
 }
 
+.modal-share-card {
+  position: relative;
+  width: min(100%, 480px);
+  max-height: min(90dvh, 640px);
+  overflow-y: auto;
+  padding-right: 2.5rem;
+}
+
+.share-sub-hint {
+  margin: 0 0 0.85rem;
+  font-size: 0.82rem;
+}
+
+.share-existing-list {
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.share-existing-title {
+  margin: 0 0 0.5rem;
+}
+
+.share-existing-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.share-existing-item:last-child {
+  border-bottom: none;
+}
+
+.share-existing-item.is-off {
+  opacity: 0.65;
+}
+
+.share-existing-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.share-existing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.share-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.share-create-form label {
+  font-size: 0.82rem;
+  margin-top: 0.25rem;
+}
+
+.share-select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface, var(--card));
+  color: var(--text);
+}
+
+.share-create-result {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.share-url-row {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+
+.share-url-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface2, var(--bg));
+  color: var(--text);
+}
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: 14px;
