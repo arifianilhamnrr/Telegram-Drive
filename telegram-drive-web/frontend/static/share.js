@@ -29,9 +29,17 @@ const FILE_TYPE_MAP = {
 
 let shareMeta = null;
 let sharePage = 1;
+let shareFilesFilter = "all";
 let loadedShareFiles = [];
-let lastShareListMeta = { total_pages: 1, files: [] };
+let lastShareListMeta = { total_pages: 1, files: [], filter: "all" };
 const selectedShareIds = new Set();
+
+const SHARE_FILTER_LABELS = {
+  all: "file",
+  photo: "foto",
+  video: "video",
+  document: "dokumen",
+};
 
 const VISIBILITY_HINTS = {
   both: "Pengunjung dapat melihat pratinjau dan mengunduh file.",
@@ -217,6 +225,26 @@ function applyShareMeta(meta) {
   $("#share-title").textContent = title;
   $("#share-password-title").textContent = title;
   $("#share-visibility-hint").textContent = VISIBILITY_HINTS[meta.visibility] || "";
+  const toolbar = $("#share-files-toolbar");
+  if (toolbar) {
+    if (meta.share_type === "file") hide(toolbar);
+    else show(toolbar);
+  }
+}
+
+function syncShareFilterButtons() {
+  document.querySelectorAll("[data-share-filter]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.shareFilter === shareFilesFilter);
+  });
+}
+
+function shareEmptyMessage() {
+  const ft = lastShareListMeta.filter || shareFilesFilter;
+  if (ft !== "all") {
+    const label = SHARE_FILTER_LABELS[ft] || ft;
+    return `Tidak ada ${label} di folder ini.`;
+  }
+  return "Tidak ada file di folder ini.";
 }
 
 async function tryUnlock(password) {
@@ -228,7 +256,11 @@ async function tryUnlock(password) {
 }
 
 async function loadFiles(page = 1) {
-  const q = new URLSearchParams({ page: String(page), per_page: "24" });
+  const q = new URLSearchParams({
+    page: String(page),
+    per_page: "24",
+    filter: shareFilesFilter,
+  });
   return apiPublic(`${SHARE_API}/files?${q}`);
 }
 
@@ -254,10 +286,12 @@ function renderShareFiles(data, page) {
   const files = data.files || [];
   loadedShareFiles = files;
 
+  syncShareFilterButtons();
+
   if (!files.length) {
     hide(grid);
     show(empty);
-    empty.textContent = "Tidak ada file di folder ini.";
+    empty.textContent = shareEmptyMessage();
     updateShareBulkBar();
     return;
   }
@@ -451,6 +485,8 @@ async function bootstrap() {
     }
     setState("content");
     sharePage = 1;
+    shareFilesFilter = "all";
+    syncShareFilterButtons();
     selectedShareIds.clear();
     await refreshFiles();
   } catch (e) {
@@ -474,6 +510,8 @@ $("#form-share-password")?.addEventListener("submit", async (e) => {
     applyShareMeta(meta);
     setState("content");
     sharePage = 1;
+    shareFilesFilter = "all";
+    syncShareFilterButtons();
     selectedShareIds.clear();
     await refreshFiles();
   } catch (err) {
@@ -481,6 +519,17 @@ $("#form-share-password")?.addEventListener("submit", async (e) => {
       err.code === "share_password_invalid" ? "Password salah." : err.message || "Gagal membuka link.";
     show(errEl);
   }
+});
+
+document.querySelectorAll("[data-share-filter]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const ft = btn.dataset.shareFilter || "all";
+    if (ft === shareFilesFilter) return;
+    shareFilesFilter = ft;
+    sharePage = 1;
+    syncShareFilterButtons();
+    refreshFiles();
+  });
 });
 
 $("#share-select-all")?.addEventListener("change", (e) => {

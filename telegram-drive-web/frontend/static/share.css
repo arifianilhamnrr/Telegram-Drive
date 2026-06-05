@@ -56,6 +56,10 @@
   min-width: 160px;
 }
 
+.share-files-toolbar {
+  margin-top: 0.5rem;
+}
+
 .share-bulk-bar {
   margin: 0.75rem 0 0.25rem;
   flex-wrap: wrap;
