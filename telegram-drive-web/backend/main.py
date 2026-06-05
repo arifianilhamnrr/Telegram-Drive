@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Literal, Optional
 
+from .file_filters import file_category
+
 import httpx
 from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -36,7 +38,7 @@ from .deps import (
 )
 from .errors import http_exception_from_value
 from .media_stream import build_media_response, preview_inline_allowed
-from .telegram_mgr import mgr
+from .telegram_mgr import _fmt_size, mgr
 from .url_fetcher import fetch_import_to_bytes, normalize_import_url, probe_import_filename
 from .ytdlp_fetcher import (
     delete_cookies_file,
@@ -193,6 +195,10 @@ class ShareUpdateBody(BaseModel):
 
 class SharePasswordBody(BaseModel):
     password: str = Field(min_length=1)
+
+
+class PublicShareBulkBody(BaseModel):
+    message_ids: List[int] = Field(min_length=1, max_length=50)
 
 
 @app.get("/health")
@@ -801,6 +807,64 @@ def _share_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def _build_share_file_entry(
+    message_id: int,
+    name: str,
+    mime: str,
+    size: int,
+    folder_id: int,
+) -> dict:
+    ext = Path(name).suffix.lstrip(".").lower()
+    mime_l = (mime or "").lower()
+    kind = "document"
+    if mime_l.startswith("image/"):
+        kind = "image"
+    elif mime_l.startswith("video/"):
+        kind = "video"
+    elif mime_l.startswith("audio/"):
+        kind = "audio"
+    category = file_category(kind, mime_l, ext)
+    is_pdf = mime_l == "application/pdf" or ext == "pdf" or name.lower().endswith(".pdf")
+    previewable = (
+        category in ("photo", "video")
+        or kind in ("image", "video")
+        or mime_l.startswith(("image/", "video/"))
+        or is_pdf
+    )
+    return {
+        "id": message_id,
+        "name": name,
+        "size": size,
+        "sizeStr": _fmt_size(size),
+        "mime": mime,
+        "kind": kind,
+        "ext": ext,
+        "category": category,
+        "previewable": previewable,
+        "folder_id": folder_id,
+    }
+
+
+def _share_allows_listing(visibility: str) -> bool:
+    return visibility_allows_preview(visibility) or visibility_allows_download(visibility)
+
+
+def _share_allows_inline_preview(visibility: str, mime: str, name: str) -> bool:
+    if visibility_allows_preview(visibility):
+        return preview_inline_allowed(mime, name)
+    if visibility_allows_download(visibility):
+        m = (mime or "").lower()
+        return m.startswith(("image/", "video/"))
+    return False
+
+
+def _validate_share_message_ids(share, message_ids: List[int]) -> None:
+    if share.share_type == "file" and share.message_id:
+        bad = [i for i in message_ids if i != share.message_id]
+        if bad:
+            raise HTTPException(400, "file_not_in_share")
+
+
 async def _load_public_share(
     token: str,
     share_store: ShareStore,
@@ -967,22 +1031,16 @@ async def public_share_files(
     td_share_access: Optional[str] = Cookie(None),
 ):
     share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
-    if not visibility_allows_preview(share.visibility):
-        raise HTTPException(403, "share_preview_disabled")
+    if not _share_allows_listing(share.visibility):
+        raise HTTPException(403, "share_access_disabled")
     try:
         if share.share_type == "file" and share.message_id:
             name, mime, size = await mgr.get_download_meta(
                 owner.telegram_sid, share.folder_id, share.message_id
             )
-            entry = {
-                "id": share.message_id,
-                "name": name,
-                "size": size,
-                "sizeStr": None,
-                "mime": mime,
-                "previewable": preview_inline_allowed(mime, name),
-                "folder_id": share.folder_id,
-            }
+            entry = _build_share_file_entry(
+                share.message_id, name, mime, size, share.folder_id
+            )
             return {
                 "files": [entry],
                 "total": 1,
@@ -1019,8 +1077,6 @@ async def public_share_preview(
     td_share_access: Optional[str] = Cookie(None),
 ):
     share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
-    if not visibility_allows_preview(share.visibility):
-        raise HTTPException(403, "share_preview_disabled")
     check_share_file_target(share, message_id)
     try:
         name, mime, size = await mgr.get_download_meta(
@@ -1032,6 +1088,8 @@ async def public_share_preview(
         raise HTTPException(401, "telegram_unavailable") from e
     except Exception as e:
         raise HTTPException(502, str(e)) from e
+    if not _share_allows_inline_preview(share.visibility, mime, name):
+        raise HTTPException(403, "share_preview_disabled")
     if not preview_inline_allowed(mime, name):
         raise HTTPException(415, "preview_not_available")
     sid = owner.telegram_sid
@@ -1078,6 +1136,42 @@ async def public_share_download(
 
     return await build_media_response(
         request, filename=name, mime=mime, size=size, stream_factory=stream_at, inline=False
+    )
+
+
+@app.post("/api/public/s/{token}/download/bulk")
+async def public_share_bulk_download(
+    token: str,
+    body: PublicShareBulkBody,
+    background_tasks: BackgroundTasks,
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    if not visibility_allows_download(share.visibility):
+        raise HTTPException(403, "share_download_disabled")
+    _validate_share_message_ids(share, body.message_ids)
+    try:
+        zip_path = await mgr.build_bulk_zip(
+            owner.telegram_sid, share.folder_id, body.message_ids
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg in ("not_authenticated", "telegram_required"):
+            raise HTTPException(401, "telegram_unavailable") from e
+        raise HTTPException(400, msg) from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+
+    def _cleanup(p: Path) -> None:
+        p.unlink(missing_ok=True)
+
+    background_tasks.add_task(_cleanup, zip_path)
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"share-{token[:8]}-{len(body.message_ids)}files.zip",
     )
 
 

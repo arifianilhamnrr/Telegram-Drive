@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Telegram Drive — Share</title>
-  <link rel="stylesheet" href="/static/themes.css?v=54">
-  <link rel="stylesheet" href="/static/style.css?v=54">
-  <link rel="stylesheet" href="/static/share.css?v=54">
+  <link rel="stylesheet" href="/static/themes.css?v=55">
+  <link rel="stylesheet" href="/static/style.css?v=55">
+  <link rel="stylesheet" href="/static/share.css?v=55">
 </head>
-<body class="share-page-body">
+<body class="share-page-body" data-theme="default">
   <div class="share-page">
     <header class="share-header">
       <a class="share-brand" href="/">Telegram Drive</a>
@@ -36,8 +36,19 @@
       <div id="share-content" class="hidden">
         <h1 id="share-title" class="share-title">Folder</h1>
         <p id="share-visibility-hint" class="hint share-visibility-hint"></p>
+        <div id="share-bulk-bar" class="bulk-bar share-bulk-bar hidden">
+          <label class="select-all-label">
+            <input type="checkbox" id="share-select-all">
+            <span>Pilih semua</span>
+          </label>
+          <span id="share-bulk-count" class="hint">0 dipilih</span>
+          <div class="bulk-actions">
+            <button type="button" class="btn ghost sm" id="share-bulk-clear">Batal pilih</button>
+            <button type="button" class="btn sm" id="share-bulk-download">Download terpilih</button>
+          </div>
+        </div>
         <div id="share-files-empty" class="empty hidden">Tidak ada file.</div>
-        <div id="share-files-grid" class="share-file-grid hidden"></div>
+        <div id="share-files-grid" class="file-grid share-files-grid hidden"></div>
         <div id="share-pagination" class="files-pagination hidden"></div>
       </div>
     </main>
@@ -54,6 +65,6 @@
     </div>
   </div>
 
-  <script src="/static/share.js?v=54"></script>
+  <script src="/static/share.js?v=55"></script>
 </body>
 </html>
