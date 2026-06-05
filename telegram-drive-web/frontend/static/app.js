@@ -8,6 +8,7 @@ let accountRegisterMode = false;
 let currentAppPanel = "drive";
 let currentFolderId = 0;
 let currentFolderName = "Saved Messages";
+let currentSettingsSection = "";
 let pendingUploadFiles = [];
 let uploadPreviewUrls = [];
 let confirmCallback = null;
@@ -38,22 +39,45 @@ const SAWERIA_URL_DEFAULT = "https://saweria.co/arifianilhamnr";
 const DONATION_QR_URL = "/api/donation/qr";
 let donationInfo = { enabled: true, saweria_url: SAWERIA_URL_DEFAULT, qr_available: true };
 
-function parseDriveUrl() {
+function parseAppState() {
   const p = new URLSearchParams(window.location.search);
-  return {
-    folder: normalizeFolderId(p.get("folder") || 0),
-    page: Math.max(1, parseInt(p.get("page") || "1", 10) || 1),
-    filter: p.get("filter") || "all",
-    q: (p.get("q") || "").trim(),
-  };
+  const panel = p.get("panel") || "drive";
+  const state = { panel };
+
+  if (panel === "drive") {
+    state.folder = normalizeFolderId(p.get("folder") || 0);
+    state.page = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
+    state.filter = p.get("filter") || "all";
+    state.q = (p.get("q") || "").trim();
+  } else if (panel === "movies") {
+    state.kind = p.get("kind") || "new";
+    state.page = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
+    state.q = (p.get("q") || "").trim();
+  } else if (panel === "settings") {
+    state.section = p.get("section") || "";
+  }
+  return state;
 }
 
-function syncDriveUrl() {
+function syncAppState() {
   const params = new URLSearchParams();
-  if (currentFolderId) params.set("folder", currentFolderId);
-  if (filesPage > 1) params.set("page", filesPage);
-  if (filesFilter && filesFilter !== "all") params.set("filter", filesFilter);
-  if (filesSearch) params.set("q", filesSearch);
+  params.set("panel", currentAppPanel || "drive");
+
+  if (currentAppPanel === "drive") {
+    if (currentFolderId) params.set("folder", currentFolderId);
+    if (filesPage > 1) params.set("page", filesPage);
+    if (filesFilter && filesFilter !== "all") params.set("filter", filesFilter);
+    if (filesSearch) params.set("q", filesSearch);
+  } else if (currentAppPanel === "movies") {
+    const m = window.MoviesPanel?.getState?.() || {};
+    if (m.kind && m.kind !== "new") params.set("kind", m.kind);
+    if (m.page > 1) params.set("page", m.page);
+    if (m.q) params.set("q", m.q);
+  } else if (currentAppPanel === "settings") {
+    const sec = window.currentSettingsSection || "";
+    if (sec) params.set("section", sec);
+  }
+
   const qs = params.toString();
   const newSearch = qs ? "?" + qs : "";
   if (location.search !== newSearch) {
@@ -62,15 +86,29 @@ function syncDriveUrl() {
 }
 
 window.addEventListener("popstate", () => {
-  const s = parseDriveUrl();
-  currentFolderId = s.folder || 0;
-  filesPage = s.page || 1;
-  filesFilter = s.filter || "all";
-  filesSearch = s.q || "";
-  // reload current view
+  const s = parseAppState();
+  currentAppPanel = s.panel || "drive";
+
   if (currentAppPanel === "drive") {
+    currentFolderId = s.folder || 0;
+    filesPage = s.page || 1;
+    filesFilter = s.filter || "all";
+    filesSearch = s.q || "";
     loadFolders({ reloadFiles: false });
     loadFiles(currentFolderId);
+  } else if (currentAppPanel === "movies" && window.MoviesPanel?.setState) {
+    window.MoviesPanel.setState({ kind: s.kind, page: s.page, q: s.q });
+    // onShow will be called? but for popstate we may need to trigger reload
+    if (typeof window.MoviesPanel?.onShow === "function") {
+      // call with state to avoid reset
+      window.MoviesPanel.onShow({ kind: s.kind, page: s.page, q: s.q });
+    } else {
+      // fallback
+      showAppPanel("movies");
+    }
+  } else if (currentAppPanel === "settings") {
+    window.currentSettingsSection = s.section || "";
+    showAppPanel("settings");
   }
 });
 let donateQrBound = false;
@@ -90,6 +128,10 @@ function setAdminSectionVisible(el, visible) {
     show(el);
     el.hidden = false;
     el.setAttribute("aria-hidden", "false");
+    // track for URL persistence
+    if (el.id === "settings-admin-lk21-section") window.currentSettingsSection = "lk21";
+    else if (el.id === "settings-admin-donation-section") window.currentSettingsSection = "donation";
+    else if (el.id === "settings-admin-section") window.currentSettingsSection = "ytdlp";
   } else {
     hide(el);
     el.hidden = true;
@@ -1409,6 +1451,7 @@ async function refreshAdminSections() {
   setAdminSectionVisible(donationSec, true);
   await refreshAdminDonationForm();
   setAdminSectionVisible(lk21Sec, true);
+  window.currentSettingsSection = "lk21";
   await refreshAdminLk21Form();
   setAdminSectionVisible(ytdlpSec, false);
 }
@@ -1748,6 +1791,7 @@ function showAppPanel(panel) {
     );
   }
   closeMobileSidebar();
+  syncAppState();
 }
 
 function isMobileSidebarLayout() {
@@ -1851,20 +1895,36 @@ async function init() {
 
 function enterApp(st) {
   showView("app");
-  showAppPanel("drive");
   const u = st.user || {};
   $("#user-box").innerHTML = renderUserBox(u);
 
-  // Restore drive state from URL on initial load / refresh
-  const urlState = parseDriveUrl();
-  if (urlState.folder) currentFolderId = urlState.folder;
-  if (urlState.page) filesPage = urlState.page;
-  if (urlState.filter) filesFilter = urlState.filter;
-  if (urlState.q) filesSearch = urlState.q;
+  // Restore full app state from URL on initial load / refresh
+  const urlState = parseAppState();
+  currentAppPanel = urlState.panel || "drive";
 
-  loadFolders();
-  // ensure URL is clean (in case of extra params)
-  syncDriveUrl();
+  if (currentAppPanel === "drive") {
+    if (urlState.folder) currentFolderId = urlState.folder;
+    if (urlState.page) filesPage = urlState.page;
+    if (urlState.filter) filesFilter = urlState.filter;
+    if (urlState.q) filesSearch = urlState.q;
+  } else if (currentAppPanel === "movies" && window.MoviesPanel?.setState) {
+    window.MoviesPanel.setState({
+      kind: urlState.kind || "new",
+      page: urlState.page || 1,
+      q: urlState.q || ""
+    });
+  } else if (currentAppPanel === "settings") {
+    window.currentSettingsSection = urlState.section || "";
+  }
+
+  // Show the correct panel from URL
+  showAppPanel(currentAppPanel);
+
+  if (currentAppPanel === "drive") {
+    loadFolders();
+  }
+  // ensure URL is clean
+  syncAppState();
 }
 
 function setFolderHeader(name) {
@@ -2093,7 +2153,7 @@ async function selectFolder(id, name, itemEl) {
   if (itemEl) itemEl.classList.add("active");
   filesPage = 1;
   clearSelection();
-  syncDriveUrl();
+  syncAppState();
   await loadFiles(folderId);
   closeMobileSidebar();
 }
@@ -2108,7 +2168,7 @@ function scheduleFilesSearch() {
     filesSearch = next;
     filesPage = 1;
     clearSelection();
-    syncDriveUrl();
+    syncAppState();
     loadFiles(currentFolderId);
   }, 350);
 }
@@ -2121,7 +2181,7 @@ $$(".file-filter").forEach((btn) => {
     filesPage = 1;
     clearSelection();
     syncFileFilterButtons();
-    syncDriveUrl();
+    syncAppState();
     loadFiles(currentFolderId);
   });
 });
@@ -2132,7 +2192,7 @@ $("#files-search")?.addEventListener("search", () => {
   filesSearch = (el?.value || "").trim();
   filesPage = 1;
   clearSelection();
-  syncDriveUrl();
+  syncAppState();
   loadFiles(currentFolderId);
 });
 
@@ -2219,7 +2279,7 @@ function renderFilesPagination() {
         if (!Number.isFinite(p) || p === filesPage) return;
         filesPage = p;
         clearSelection();
-        syncDriveUrl();
+        syncAppState();
         loadFiles(currentFolderId);
       };
     });
@@ -2460,7 +2520,7 @@ async function loadFiles(targetFolderId = currentFolderId) {
 
     filesPage = data.page || filesPage;
     renderFileList(data.files || [], folderId, data);
-    syncDriveUrl();
+    syncAppState();
   } catch (e) {
     if (e.name === "AbortError") return;
     if (reqId !== filesLoadGen || !sameFolderId(folderId, currentFolderId)) return;

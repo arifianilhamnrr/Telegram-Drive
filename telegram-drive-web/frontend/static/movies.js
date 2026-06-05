@@ -14,6 +14,16 @@ const MoviesPanel = (() => {
   let movieSaveFolderId = null;
   let movieSaveFolderName = "";
 
+  function getState() {
+    return { kind, page, q: searchQuery };
+  }
+
+  function setState(s = {}) {
+    if (s.kind) kind = s.kind;
+    if (typeof s.page === "number" && s.page > 0) page = s.page;
+    if (s.q !== undefined) searchQuery = s.q || "";
+  }
+
   function show(el) {
     if (el) el.classList.remove("hidden");
   }
@@ -314,12 +324,14 @@ const MoviesPanel = (() => {
       if (page > 1) {
         page -= 1;
         loadList();
+        if (typeof window.syncAppState === "function") window.syncAppState();
       }
     });
     pag.querySelector('[data-movie-page="next"]')?.addEventListener("click", () => {
       if (page < totalPages) {
         page += 1;
         loadList();
+        if (typeof window.syncAppState === "function") window.syncAppState();
       }
     });
   }
@@ -344,6 +356,7 @@ const MoviesPanel = (() => {
         data = await api(`/api/movies/lk21/list?${q}`);
       }
       renderMovies(data);
+      if (typeof window.syncAppState === "function") window.syncAppState();
     } catch (e) {
       hide(loading);
       show(err);
@@ -681,12 +694,14 @@ const MoviesPanel = (() => {
     }
   }
 
-  function onShow() {
+  function onShow(initial = null) {
+    if (initial) {
+      setState(initial);
+    }
+    // do not force reset here; state persists within session + restored from URL on refresh
     showBrowse();
-    page = 1;
-    searchQuery = "";
     const inp = $("#movie-search-input");
-    if (inp) inp.value = "";
+    if (inp) inp.value = searchQuery || "";
     syncTabs();
     loadList();
   }
@@ -699,6 +714,7 @@ const MoviesPanel = (() => {
         page = 1;
         syncTabs();
         loadList();
+        if (typeof window.syncAppState === "function") window.syncAppState();
       });
     });
 
@@ -708,6 +724,7 @@ const MoviesPanel = (() => {
       page = 1;
       syncTabs();
       loadList();
+      if (typeof window.syncAppState === "function") window.syncAppState();
     });
 
     $("#btn-movies-back")?.addEventListener("click", showBrowse);
@@ -719,7 +736,7 @@ const MoviesPanel = (() => {
 
   bind();
 
-  return { onShow, showBrowse };
+  return { onShow, showBrowse, getState, setState };
 })();
 
 window.MoviesPanel = MoviesPanel;
