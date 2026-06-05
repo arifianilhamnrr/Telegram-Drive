@@ -37,6 +37,42 @@ const MOTION_MS = 240;
 const SAWERIA_URL_DEFAULT = "https://saweria.co/arifianilhamnr";
 const DONATION_QR_URL = "/api/donation/qr";
 let donationInfo = { enabled: true, saweria_url: SAWERIA_URL_DEFAULT, qr_available: true };
+
+function parseDriveUrl() {
+  const p = new URLSearchParams(window.location.search);
+  return {
+    folder: normalizeFolderId(p.get("folder") || 0),
+    page: Math.max(1, parseInt(p.get("page") || "1", 10) || 1),
+    filter: p.get("filter") || "all",
+    q: (p.get("q") || "").trim(),
+  };
+}
+
+function syncDriveUrl() {
+  const params = new URLSearchParams();
+  if (currentFolderId) params.set("folder", currentFolderId);
+  if (filesPage > 1) params.set("page", filesPage);
+  if (filesFilter && filesFilter !== "all") params.set("filter", filesFilter);
+  if (filesSearch) params.set("q", filesSearch);
+  const qs = params.toString();
+  const newSearch = qs ? "?" + qs : "";
+  if (location.search !== newSearch) {
+    history.replaceState(null, "", location.pathname + newSearch);
+  }
+}
+
+window.addEventListener("popstate", () => {
+  const s = parseDriveUrl();
+  currentFolderId = s.folder || 0;
+  filesPage = s.page || 1;
+  filesFilter = s.filter || "all";
+  filesSearch = s.q || "";
+  // reload current view
+  if (currentAppPanel === "drive") {
+    loadFolders({ reloadFiles: false });
+    loadFiles(currentFolderId);
+  }
+});
 let donateQrBound = false;
 
 function applyDonationInfo(info) {
@@ -1818,7 +1854,17 @@ function enterApp(st) {
   showAppPanel("drive");
   const u = st.user || {};
   $("#user-box").innerHTML = renderUserBox(u);
+
+  // Restore drive state from URL on initial load / refresh
+  const urlState = parseDriveUrl();
+  if (urlState.folder) currentFolderId = urlState.folder;
+  if (urlState.page) filesPage = urlState.page;
+  if (urlState.filter) filesFilter = urlState.filter;
+  if (urlState.q) filesSearch = urlState.q;
+
   loadFolders();
+  // ensure URL is clean (in case of extra params)
+  syncDriveUrl();
 }
 
 function setFolderHeader(name) {
@@ -1934,7 +1980,6 @@ async function loadFolders(options = {}) {
     });
   }
   if (reloadFiles) {
-    filesPage = 1;
     clearSelection();
     await loadFiles(activeId);
   }
@@ -2048,6 +2093,7 @@ async function selectFolder(id, name, itemEl) {
   if (itemEl) itemEl.classList.add("active");
   filesPage = 1;
   clearSelection();
+  syncDriveUrl();
   await loadFiles(folderId);
   closeMobileSidebar();
 }
@@ -2062,6 +2108,7 @@ function scheduleFilesSearch() {
     filesSearch = next;
     filesPage = 1;
     clearSelection();
+    syncDriveUrl();
     loadFiles(currentFolderId);
   }, 350);
 }
@@ -2074,6 +2121,7 @@ $$(".file-filter").forEach((btn) => {
     filesPage = 1;
     clearSelection();
     syncFileFilterButtons();
+    syncDriveUrl();
     loadFiles(currentFolderId);
   });
 });
@@ -2084,6 +2132,7 @@ $("#files-search")?.addEventListener("search", () => {
   filesSearch = (el?.value || "").trim();
   filesPage = 1;
   clearSelection();
+  syncDriveUrl();
   loadFiles(currentFolderId);
 });
 
@@ -2170,6 +2219,7 @@ function renderFilesPagination() {
         if (!Number.isFinite(p) || p === filesPage) return;
         filesPage = p;
         clearSelection();
+        syncDriveUrl();
         loadFiles(currentFolderId);
       };
     });
@@ -2410,6 +2460,7 @@ async function loadFiles(targetFolderId = currentFolderId) {
 
     filesPage = data.page || filesPage;
     renderFileList(data.files || [], folderId, data);
+    syncDriveUrl();
   } catch (e) {
     if (e.name === "AbortError") return;
     if (reqId !== filesLoadGen || !sameFolderId(folderId, currentFolderId)) return;
