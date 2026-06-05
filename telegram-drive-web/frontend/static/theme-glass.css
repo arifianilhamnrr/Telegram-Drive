@@ -1,0 +1,212 @@
+/* Glassmorphism — minimal, netral, tetap frosted glass */
+
+[data-theme="glass"] {
+  color-scheme: dark;
+}
+
+[data-theme="glass"] html,
+[data-theme="glass"] body {
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+[data-theme="glass"] body {
+  min-height: 100dvh;
+  background-color: var(--bg);
+  background-image: linear-gradient(180deg, #161b22 0%, #0f1318 100%);
+  background-attachment: fixed;
+}
+
+[data-theme="glass"] .sidebar,
+[data-theme="glass"] .topbar,
+[data-theme="glass"] .card,
+[data-theme="glass"] .auth-card,
+[data-theme="glass"] .modal-card,
+[data-theme="glass"] .file-card,
+[data-theme="glass"] .user-box,
+[data-theme="glass"] .bulk-bar,
+[data-theme="glass"] .theme-option,
+[data-theme="glass"] .dropzone,
+[data-theme="glass"] .btn-icon,
+[data-theme="glass"] .btn-icon-sm,
+[data-theme="glass"] .modal-preview-wrap .modal-preview-body {
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+}
+
+[data-theme="glass"] .main,
+[data-theme="glass"] .auth-wrap {
+  background: transparent;
+}
+
+[data-theme="glass"] .sidebar-footer {
+  background: rgba(12, 18, 34, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+[data-theme="glass"] .sidebar {
+  background: rgba(22, 27, 34, 0.55);
+}
+
+[data-theme="glass"] .topbar {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="glass"] .file-card {
+  background: rgba(255, 255, 255, 0.06);
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+[data-theme="glass"] .file-card:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
+}
+
+[data-theme="glass"] .file-card.selected {
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12),
+    var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="glass"] .folder-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="glass"] .folder-item.active {
+  background: var(--accent-glow);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="glass"] .folder-item.active .folder-main {
+  color: var(--text);
+}
+
+[data-theme="glass"] .brand-icon {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  color: var(--text);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="glass"] .btn {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+[data-theme="glass"] .btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
+}
+
+[data-theme="glass"] .btn.ghost {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+}
+
+[data-theme="glass"] .btn.ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+[data-theme="glass"] .btn.danger {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.3);
+  color: var(--danger);
+}
+
+[data-theme="glass"] #confirm-ok.btn.danger {
+  background: rgba(251, 113, 133, 0.35);
+  color: #fff;
+}
+
+[data-theme="glass"] .dropzone-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+[data-theme="glass"] .dropzone.dragover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+[data-theme="glass"] input[type="text"],
+[data-theme="glass"] input[type="password"],
+[data-theme="glass"] input[type="tel"],
+[data-theme="glass"] input[type="number"],
+[data-theme="glass"] input[type="url"],
+[data-theme="glass"] .ingest-panel input[type="url"],
+[data-theme="glass"] .ingest-panel input[type="text"] {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="glass"] input:focus {
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="glass"] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="glass"] .modal-top .modal-backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="glass"] .modal.modal-behind .modal-card {
+  filter: blur(3px);
+  opacity: 0.5;
+}
+
+[data-theme="glass"] .modal-card {
+  background: rgba(30, 36, 44, 0.75);
+}
+
+[data-theme="glass"] .flood-wait-box {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+}
+
+[data-theme="glass"] .theme-option.active {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow: var(--shadow);
+}
+
+[data-theme="glass"] .file-thumb {
+  background: rgba(0, 0, 0, 0.25);
+  border-color: var(--glass-border);
+}
+
+[data-theme="glass"] .error {
+  background: rgba(251, 113, 133, 0.1);
+  border: 1px solid rgba(251, 113, 133, 0.25);
+}
+
+[data-theme="glass"] .status-msg {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+  color: var(--ok);
+}
+
+[data-theme="glass"] .hint a {
+  color: var(--accent);
+}

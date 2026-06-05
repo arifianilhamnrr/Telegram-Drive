@@ -1,0 +1,6 @@
+# Template referensi — deploy.sh --ssl menulis Caddyfile dari DOMAIN & ACME_EMAIL di .env
+{$DOMAIN} {
+	email {$ACME_EMAIL}
+	encode gzip
+	reverse_proxy app:8080
+}

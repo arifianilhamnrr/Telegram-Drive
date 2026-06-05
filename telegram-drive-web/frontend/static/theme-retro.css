@@ -1,0 +1,370 @@
+/* Retro — Grunge Rock 90s / mixtape zine (hanya aktif saat data-theme="retro") */
+
+[data-theme="retro"] {
+  color-scheme: light;
+}
+
+[data-theme="retro"] html,
+[data-theme="retro"] body {
+  font-family: var(--font-grunge);
+  letter-spacing: 0.02em;
+}
+
+[data-theme="retro"] body {
+  min-height: 100dvh;
+  background-color: var(--retro-paper);
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(46, 46, 46, 0.03) 2px,
+      rgba(46, 46, 46, 0.03) 3px
+    );
+}
+
+[data-theme="retro"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: var(--distress-opacity, 0.35);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+}
+
+[data-theme="retro"] *::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+}
+
+[data-theme="retro"] .brand-text h1,
+[data-theme="retro"] .topbar-title strong,
+[data-theme="retro"] .modal-card h3,
+[data-theme="retro"] .card h3,
+[data-theme="retro"] .auth-card h2 {
+  font-family: var(--font-grunge);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+[data-theme="retro"] .brand-text h1 {
+  animation: retro-flicker 4s ease-in-out infinite;
+}
+
+@keyframes retro-flicker {
+  0%, 92%, 100% { opacity: 1; }
+  93% { opacity: 0.92; }
+  94% { opacity: 1; }
+  95% { opacity: 0.88; }
+  96% { opacity: 1; }
+}
+
+[data-theme="retro"] .brand-icon {
+  border-radius: 2px;
+  border: 2px solid var(--retro-black);
+  background: var(--retro-yellow);
+  color: var(--retro-black);
+  box-shadow: var(--hard-shadow);
+  font-family: var(--font-grunge);
+}
+
+[data-theme="retro"] .sidebar {
+  border-right: 3px solid var(--retro-black);
+  background: var(--bg-elevated);
+}
+
+[data-theme="retro"] .sidebar-brand {
+  border-bottom: 3px solid var(--retro-black);
+}
+
+[data-theme="retro"] .sidebar-footer {
+  background: var(--surface2);
+  border-top: 3px solid var(--retro-black);
+  position: sticky;
+  bottom: 0;
+}
+
+[data-theme="retro"] .topbar {
+  border-bottom: 3px solid var(--retro-black);
+  background: var(--bg-elevated);
+}
+
+[data-theme="retro"] .folder-item:hover {
+  background: rgba(181, 166, 66, 0.15);
+}
+
+[data-theme="retro"] .folder-item.active {
+  background: var(--accent-glow);
+  border-color: var(--retro-black);
+  border-width: 2px;
+  border-style: dashed;
+}
+
+[data-theme="retro"] .folder-item.active .folder-main {
+  color: var(--retro-black);
+  text-decoration: underline;
+  font-weight: 700;
+}
+
+[data-theme="retro"] .user-box {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .card,
+[data-theme="retro"] .auth-card,
+[data-theme="retro"] .modal-card {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  box-shadow: var(--hard-shadow);
+}
+
+[data-theme="retro"] .file-card {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  box-shadow: var(--hard-shadow);
+  transition: transform 0.22s ease-out, box-shadow 0.22s ease-out;
+}
+
+[data-theme="retro"] .file-card:nth-child(3n + 1) { transform: rotate(-1.5deg); }
+[data-theme="retro"] .file-card:nth-child(3n + 2) { transform: rotate(1deg); }
+[data-theme="retro"] .file-card:nth-child(3n) { transform: rotate(-0.5deg); }
+
+[data-theme="retro"] .file-card:hover,
+[data-theme="retro"] .file-card.selected {
+  transform: rotate(0deg);
+  border-color: var(--retro-black);
+  box-shadow: 6px 6px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .file-card.selected {
+  box-shadow: 6px 6px 0 var(--retro-orange);
+  outline: 2px dashed var(--retro-yellow);
+}
+
+[data-theme="retro"] .file-thumb img,
+[data-theme="retro"] .file-thumb video,
+[data-theme="retro"] .upload-preview-img,
+[data-theme="retro"] .upload-preview-vid {
+  filter: saturate(0.8) contrast(1.3);
+  border: 2px solid var(--retro-black);
+  border-radius: 2px;
+}
+
+[data-theme="retro"] .file-thumb {
+  border-radius: 2px;
+  position: relative;
+}
+
+[data-theme="retro"] .file-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-radial-gradient(
+    circle at 50% 50%,
+    transparent 0,
+    transparent 2px,
+    rgba(46, 46, 46, 0.08) 2px,
+    rgba(46, 46, 46, 0.08) 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+[data-theme="retro"] .btn {
+  font-family: var(--font-grunge);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius);
+  border: 2px solid var(--retro-black);
+  background: var(--retro-yellow);
+  color: var(--retro-black);
+  box-shadow: var(--hard-shadow);
+  transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+[data-theme="retro"] .btn:hover:not(:disabled) {
+  background: var(--retro-orange);
+  color: var(--retro-paper);
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .btn:disabled {
+  filter: saturate(0.6);
+}
+
+[data-theme="retro"] .btn.ghost {
+  background: transparent;
+  color: var(--retro-black);
+  border: 2px dashed var(--retro-black);
+  box-shadow: none;
+}
+
+[data-theme="retro"] .btn.ghost:hover:not(:disabled) {
+  background: rgba(181, 166, 66, 0.35);
+  transform: none;
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .btn.danger {
+  background: var(--retro-paper);
+  color: var(--retro-red);
+  border-color: var(--retro-red);
+}
+
+[data-theme="retro"] #confirm-ok.btn.danger {
+  background: var(--retro-red);
+  color: var(--retro-paper);
+  border: 2px solid var(--retro-black);
+}
+
+[data-theme="retro"] #confirm-ok.btn.danger:hover {
+  background: #6d1f1f;
+  filter: none;
+}
+
+[data-theme="retro"] .btn-icon,
+[data-theme="retro"] .btn-icon-sm {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .dropzone {
+  border: 2px dashed var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--surface2);
+}
+
+[data-theme="retro"] .dropzone.dragover {
+  background: var(--accent-glow);
+  border-style: solid;
+}
+
+[data-theme="retro"] .dropzone-icon {
+  border-radius: 2px;
+  border: 2px solid var(--retro-black);
+  background: var(--retro-yellow);
+  color: var(--retro-black);
+}
+
+[data-theme="retro"] .bulk-bar {
+  border: 2px dashed var(--retro-black);
+  border-radius: var(--radius);
+  background: rgba(181, 166, 66, 0.2);
+  transform: rotate(-0.5deg);
+}
+
+[data-theme="retro"] label,
+[data-theme="retro"] .sidebar-label,
+[data-theme="retro"] .settings-label {
+  font-family: var(--font-grunge);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--retro-black);
+}
+
+[data-theme="retro"] input[type="text"],
+[data-theme="retro"] input[type="password"],
+[data-theme="retro"] input[type="tel"],
+[data-theme="retro"] input[type="number"],
+[data-theme="retro"] input[type="url"],
+[data-theme="retro"] .ingest-panel input[type="url"],
+[data-theme="retro"] .ingest-panel input[type="text"] {
+  font-family: var(--font-grunge);
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--retro-paper);
+  color: var(--retro-black);
+}
+
+[data-theme="retro"] input:focus,
+[data-theme="retro"] .ingest-panel input:focus {
+  border-color: var(--retro-orange);
+  box-shadow: 3px 3px 0 var(--retro-black);
+}
+
+[data-theme="retro"] #ingest-panel-url {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--retro-paper);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .hint a {
+  color: var(--retro-denim);
+  text-decoration: underline;
+}
+
+[data-theme="retro"] .auth-wrap {
+  background: var(--retro-paper);
+}
+
+[data-theme="retro"] .modal-backdrop {
+  background: rgba(46, 46, 46, 0.55);
+}
+
+[data-theme="retro"] .modal.modal-behind .modal-card {
+  filter: none;
+  opacity: 0.5;
+}
+
+[data-theme="retro"] .modal-card-warn {
+  border-color: var(--retro-orange);
+  border-width: 3px;
+}
+
+[data-theme="retro"] .flood-wait-box {
+  border: 2px dashed var(--retro-black);
+  border-radius: var(--radius);
+  background: rgba(181, 166, 66, 0.25);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .theme-swatch {
+  border-radius: 2px;
+  border: 2px solid var(--retro-black);
+}
+
+[data-theme="retro"] .modal-card .sub,
+[data-theme="retro"] .modal-card .settings-hint {
+  color: #5a5a5a;
+}
+
+[data-theme="retro"] .ftype {
+  border: 1px solid var(--retro-black);
+  filter: saturate(0.75) contrast(1.15);
+  border-radius: 2px;
+  font-family: var(--font-grunge);
+}
+
+[data-theme="retro"] .error {
+  border: 2px solid var(--retro-red);
+  border-radius: var(--radius);
+  background: rgba(140, 39, 39, 0.1);
+}
+
+[data-theme="retro"] .status-msg {
+  border: 2px dashed var(--retro-black);
+  border-radius: var(--radius);
+  background: rgba(107, 142, 35, 0.12);
+  color: var(--ok);
+}
+
+[data-theme="retro"] .step-dot.done { background: var(--retro-yellow); }
+[data-theme="retro"] .step-dot.active { background: var(--retro-orange); }
+
+@media (max-width: 900px) {
+  [data-theme="retro"] .file-card,
+  [data-theme="retro"] .file-card:nth-child(n) {
+    transform: none;
+  }
+}

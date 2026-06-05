@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environment & secrets
+.env
+
+# Runtime data (session Telegram, akun, QRIS custom)
+data/sessions/
+data/users.db
+data/donation.json
+data/ytdlp/cookies.txt
+
+# Logs & install artifacts
+*.log
+install.log
+install-result.txt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

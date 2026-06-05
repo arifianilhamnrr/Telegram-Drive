@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="default">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telegram Drive — Web</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("td-theme") || "default";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/themes.css?v=50">
+  <link rel="stylesheet" href="/static/style.css?v=50">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=50">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=50">
+</head>
+<body>
+  <div id="view-gate" class="auth-wrap hidden">
+    <div class="auth-card">
+      <h2>Telegram Drive Web</h2>
+      <p class="sub">Masukkan password akses situs.</p>
+      <form id="gate-form">
+        <label>Password situs</label>
+        <input type="password" id="gate-password" required autofocus>
+        <button type="submit" class="btn">Masuk</button>
+      </form>
+      <div id="gate-error" class="error hidden"></div>
+    </div>
+  </div>
+
+  <div id="view-account" class="auth-wrap hidden">
+    <div class="auth-card">
+      <h2 id="account-title">Masuk</h2>
+      <p class="sub" id="account-sub">Login akun Telegram Drive — koneksi Telegram diatur setelah masuk.</p>
+      <form id="account-login-form">
+        <label>Username</label>
+        <input type="text" id="account-username" autocomplete="username" required minlength="3" maxlength="32" placeholder="admin (huruf, angka, _)">
+        <label>Password</label>
+        <input type="password" id="account-password" autocomplete="current-password" required minlength="6">
+        <button type="submit" class="btn" id="btn-account-submit">Masuk</button>
+      </form>
+      <p class="hint account-switch">
+        <button type="button" class="link-btn" id="btn-account-toggle-mode">Buat akun baru</button>
+      </p>
+      <div id="account-error" class="error hidden"></div>
+    </div>
+  </div>
+
+  <div id="view-auth" class="auth-wrap hidden">
+    <div class="auth-card">
+      <div class="steps" id="auth-steps">
+        <div class="step-dot active" data-step="0"></div>
+        <div class="step-dot" data-step="1"></div>
+        <div class="step-dot" data-step="2"></div>
+        <div class="step-dot" data-step="3"></div>
+      </div>
+
+      <div id="auth-setup">
+        <h2>Hubungkan Telegram</h2>
+        <p class="sub">Setup sekali per akun — disimpan di server. API dari <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a></p>
+        <label>API ID</label>
+        <input type="number" id="api-id" placeholder="12345678" required>
+        <label>API Hash</label>
+        <input type="text" id="api-hash" placeholder="abcdef..." required>
+        <p class="hint">Credentials disimpan aman di server (session terenkripsi Telethon).</p>
+        <button type="button" class="btn" id="btn-setup">Lanjut</button>
+      </div>
+
+      <div id="auth-phone" class="hidden">
+        <h2>Nomor telepon</h2>
+        <p class="sub">Format internasional, contoh +62812...</p>
+        <label>Phone</label>
+        <input type="tel" id="phone" placeholder="+62..." required>
+        <button type="button" class="btn" id="btn-phone">Kirim kode</button>
+        <button type="button" class="btn ghost" style="width:100%;margin-top:0.5rem" id="btn-back-setup">Kembali</button>
+      </div>
+
+      <div id="auth-code" class="hidden">
+        <h2>Kode verifikasi</h2>
+        <p class="sub">Cek Telegram / SMS</p>
+        <label>Kode</label>
+        <input type="text" id="code" placeholder="12345" required>
+        <button type="button" class="btn" id="btn-code">Verifikasi</button>
+      </div>
+
+      <div id="auth-2fa" class="hidden">
+        <h2>Password 2FA</h2>
+        <p class="sub">Akun Anda pakai verifikasi dua langkah</p>
+        <label>Password cloud</label>
+        <input type="password" id="twofa" required>
+        <button type="button" class="btn" id="btn-2fa">Masuk</button>
+      </div>
+
+      <div id="auth-error" class="error hidden"></div>
+    </div>
+  </div>
+
+  <div id="view-app" class="app-shell hidden">
+    <div class="sidebar-backdrop hidden" id="sidebar-backdrop" aria-hidden="true"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <button type="button" class="brand-icon" id="btn-sidebar-close" aria-label="Tutup menu">
+          <span class="brand-mark-td">TD</span>
+          <span class="brand-mark-close" aria-hidden="true">×</span>
+        </button>
+        <div class="brand-text">
+          <h1>Telegram Drive</h1>
+          <p>Penyimpanan cloud</p>
+        </div>
+      </div>
+
+      <div class="sidebar-middle">
+        <nav class="sidebar-menu" aria-label="Menu utama">
+          <button type="button" class="sidebar-menu-item active" data-panel="drive" id="nav-drive">
+            <span class="sidebar-menu-icon">📁</span>
+            <span>Drive</span>
+          </button>
+          <button type="button" class="sidebar-menu-item" data-panel="settings" id="nav-settings">
+            <span class="sidebar-menu-icon">⚙</span>
+            <span>Pengaturan</span>
+          </button>
+        </nav>
+
+        <nav class="sidebar-nav sidebar-folders" id="sidebar-folders">
+          <div class="sidebar-nav-head">
+            <span class="sidebar-label">Folder</span>
+            <button type="button" class="btn-icon-sm" id="btn-new-folder" title="Folder baru">+</button>
+          </div>
+          <div class="folder-list scroll-area" id="folder-list"></div>
+        </nav>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="user-box" id="user-box"></div>
+        <button type="button" class="btn btn-logout" id="btn-logout">Keluar</button>
+      </div>
+    </aside>
+
+    <div class="app-main-column">
+    <div class="main">
+      <header class="topbar">
+        <button type="button" class="btn-icon mobile-only" id="btn-menu" aria-label="Menu">☰</button>
+        <div class="topbar-title">
+          <strong id="folder-title">Saved Messages</strong>
+          <p class="hint" id="file-count">0 file</p>
+        </div>
+        <div class="topbar-actions" id="topbar-actions-drive">
+          <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
+        </div>
+      </header>
+
+      <div id="panel-drive" class="app-panel content scroll-area">
+        <section class="card upload-card">
+          <h3>Tambah file ke folder</h3>
+          <p class="hint upload-target">Tujuan: <span id="upload-target-name">Saved Messages</span></p>
+
+          <div class="ingest-tabs" role="tablist">
+            <button type="button" class="ingest-tab active" data-ingest="file" id="ingest-tab-file">Upload file</button>
+            <button type="button" class="ingest-tab" data-ingest="url" id="ingest-tab-url">Import link</button>
+          </div>
+
+          <div id="ingest-panel-file" class="ingest-panel">
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="file-input" multiple>
+              <div class="dropzone-inner" id="dropzone-inner">
+                <span class="dropzone-icon">↑</span>
+                <p>Seret file ke sini atau klik untuk memilih</p>
+                <p class="hint" id="upload-label">Belum ada file dipilih (bisa banyak sekaligus)</p>
+                <p class="hint upload-limit-hint" id="upload-limit-hint">Maksimal per file: memuat…</p>
+              </div>
+              <div id="upload-preview" class="upload-preview hidden"></div>
+            </div>
+            <p id="upload-size-warn" class="error upload-size-warn hidden"></p>
+            <div class="upload-actions">
+              <button type="button" class="btn" id="btn-upload">Upload</button>
+            </div>
+            <div id="upload-status" class="status-msg hidden"></div>
+          </div>
+
+          <div id="ingest-panel-url" class="ingest-panel hidden">
+            <p class="hint">Direct link atau Google Drive (file publik / bisa diunduh).</p>
+            <p class="hint" id="import-limit-hint">Maksimal unduhan server: memuat…</p>
+            <label>URL unduhan</label>
+            <input type="url" id="import-url" placeholder="https://… link Drive atau direct download">
+            <label>Nama file <span class="hint">(otomatis dari link, bisa diubah)</span></label>
+            <input type="text" id="import-filename" placeholder="Tempel URL — nama file terisi otomatis" maxlength="200" autocomplete="off">
+            <p class="hint hidden" id="import-filename-hint"></p>
+            <button type="button" class="btn" id="btn-import-url">Unduh &amp; simpan ke Telegram</button>
+            <div id="import-url-status" class="status-msg hidden"></div>
+            <div id="import-url-error" class="error hidden"></div>
+          </div>
+        </section>
+
+        <section class="card files-card">
+          <div class="files-head">
+            <h3>File di folder</h3>
+            <label class="select-all-label">
+              <input type="checkbox" id="select-all-files">
+              <span>Pilih semua</span>
+            </label>
+          </div>
+          <div class="files-toolbar">
+            <div class="file-filters" role="tablist" aria-label="Filter jenis file">
+              <button type="button" class="file-filter active" data-file-filter="all">Semua</button>
+              <button type="button" class="file-filter" data-file-filter="photo">Foto</button>
+              <button type="button" class="file-filter" data-file-filter="video">Video</button>
+              <button type="button" class="file-filter" data-file-filter="document">Dokumen</button>
+            </div>
+            <div class="files-search-wrap">
+              <input type="search" id="files-search" class="files-search" placeholder="Cari nama file…" autocomplete="off" maxlength="120">
+            </div>
+          </div>
+          <div id="files-pagination-top" class="files-pagination hidden"></div>
+          <div id="bulk-bar" class="bulk-bar hidden">
+            <span id="bulk-count">0 dipilih</span>
+            <div class="bulk-actions">
+              <button type="button" class="btn ghost sm" id="btn-bulk-clear">Batal pilih</button>
+              <button type="button" class="btn ghost sm" id="btn-bulk-download">Download ZIP</button>
+              <button type="button" class="btn danger sm" id="btn-bulk-delete">Hapus terpilih</button>
+            </div>
+          </div>
+          <div id="files-empty" class="empty">Memuat daftar file...</div>
+          <div id="files-grid" class="file-grid hidden"></div>
+          <div id="files-pagination-bottom" class="files-pagination hidden"></div>
+        </section>
+      </div>
+
+      <div id="panel-settings" class="app-panel content scroll-area hidden">
+        <div class="settings-page">
+          <section class="card settings-section">
+            <h3>Tema</h3>
+            <p class="sub">Tampilan disimpan di browser ini.</p>
+            <div class="theme-picker" id="theme-picker"></div>
+            <p class="hint settings-hint">Tema Retro mengikuti design grunge 90s.</p>
+          </section>
+
+          <section class="card settings-section">
+            <h3>Akun</h3>
+            <p class="hint settings-account-user">Login sebagai <strong id="settings-account-name">—</strong></p>
+            <button type="button" class="btn ghost sm" id="btn-open-change-password">Ubah password</button>
+          </section>
+
+          <section class="card settings-section">
+            <h3>Telegram</h3>
+            <p id="settings-telegram-status" class="hint settings-telegram-status">Memuat status...</p>
+            <div class="settings-telegram-actions">
+              <button type="button" class="btn ghost sm" id="btn-settings-telegram-setup">Atur koneksi Telegram</button>
+              <button type="button" class="btn danger sm hidden" id="btn-settings-telegram-disconnect">Putuskan Telegram</button>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-donation-section" hidden aria-hidden="true">
+            <h3>Admin — QRIS donasi</h3>
+            <p class="sub">Payload string QRIS (EMV) untuk QR di notifikasi. Tempel kode dari merchant / export QRIS statis Anda.</p>
+            <div class="settings-admin-box">
+              <form id="form-admin-donation" class="settings-donation-form">
+                <label class="settings-donation-check">
+                  <input type="checkbox" id="admin-donation-enabled" checked />
+                  <span>Tampilkan blok donasi di notifikasi</span>
+                </label>
+                <label class="settings-ytdlp-label" for="admin-donation-saweria">Link Saweria</label>
+                <input
+                  type="url"
+                  id="admin-donation-saweria"
+                  class="settings-donation-input"
+                  placeholder="https://saweria.co/…"
+                  autocomplete="url"
+                  spellcheck="false"
+                />
+                <label class="settings-ytdlp-label" for="admin-donation-qris">Payload QRIS (EMV)</label>
+                <textarea
+                  id="admin-donation-qris"
+                  class="ytdlp-cookies-textarea settings-donation-qris"
+                  rows="5"
+                  spellcheck="false"
+                  placeholder="000201010211…"
+                ></textarea>
+                <p class="hint">Hanya huruf dan angka, diawali <code>000201</code>. Setelah simpan, cek pratinjau QR di bawah.</p>
+                <div class="admin-donation-preview-wrap">
+                  <p class="hint admin-donation-preview-label">Pratinjau QR</p>
+                  <img
+                    id="admin-donation-qr-preview"
+                    class="notify-donate-qr admin-donation-qr-preview"
+                    src="/api/donation/qr"
+                    width="160"
+                    height="160"
+                    alt="Pratinjau QRIS donasi"
+                    decoding="async"
+                  />
+                </div>
+                <div class="settings-ytdlp-actions">
+                  <button type="submit" class="btn sm" id="btn-admin-donation-save">Simpan QRIS</button>
+                  <button type="button" class="btn ghost sm" id="btn-admin-donation-reset">Kembalikan default</button>
+                </div>
+              </form>
+              <p id="admin-donation-status" class="hint settings-telegram-status admin-donation-status">Memuat…</p>
+              <div id="admin-donation-error" class="error hidden"></div>
+              <div id="admin-donation-ok" class="status-msg hidden"></div>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-section" hidden aria-hidden="true">
+            <h3>Admin — YouTube (yt-dlp)</h3>
+            <p class="sub">Cookie-Editor: buka <strong>youtube.com</strong> (sudah login) → Export → <strong>JSON</strong>. Perlu cookie <code>.youtube.com</code> dan <code>.google.com</code>.</p>
+            <div class="settings-admin-box">
+              <p id="admin-ytdlp-status" class="hint settings-telegram-status admin-ytdlp-status">Memuat…</p>
+              <form id="form-admin-ytdlp-cookies" class="settings-ytdlp-form">
+                <div class="ytdlp-import-tabs" role="tablist">
+                  <button type="button" class="ytdlp-import-tab active" data-ytdlp-mode="file">Upload file</button>
+                  <button type="button" class="ytdlp-import-tab" data-ytdlp-mode="text">Tempel JSON / teks</button>
+                </div>
+                <div id="ytdlp-panel-file" class="ytdlp-import-panel">
+                  <label class="settings-ytdlp-label" for="admin-ytdlp-file">File cookies</label>
+                  <div class="ytdlp-file-zone" id="ytdlp-file-zone">
+                    <input type="file" id="admin-ytdlp-file" class="ytdlp-file-input" accept=".txt,.json,application/json,text/plain">
+                    <div class="ytdlp-file-zone-inner">
+                      <span class="ytdlp-file-icon" aria-hidden="true">↑</span>
+                      <p class="ytdlp-file-prompt">Klik atau seret <strong>.txt</strong> / <strong>.json</strong> ke sini</p>
+                      <p class="hint ytdlp-file-name" id="admin-ytdlp-filename">Belum ada file dipilih</p>
+                    </div>
+                  </div>
+                </div>
+                <div id="ytdlp-panel-text" class="ytdlp-import-panel hidden">
+                  <label class="settings-ytdlp-label" for="admin-ytdlp-text">Cookies JSON atau Netscape</label>
+                  <textarea id="admin-ytdlp-text" class="ytdlp-cookies-textarea" rows="8" spellcheck="false" placeholder='Tempel export JSON Cookie-Editor di sini (bukan Header String / LWP)…'></textarea>
+                  <p class="hint">Di Cookie-Editor: pilih format <strong>JSON</strong>, export dari tab youtube.com. Lalu <strong>Cek cookies</strong> sebelum simpan.</p>
+                </div>
+                <div class="settings-ytdlp-actions">
+                  <button type="button" class="btn ghost sm" id="btn-admin-ytdlp-test">Cek cookies</button>
+                  <button type="submit" class="btn sm" id="btn-admin-ytdlp-upload">Simpan cookies</button>
+                  <button type="button" class="btn danger sm ghost hidden" id="btn-admin-ytdlp-delete">Hapus cookies</button>
+                </div>
+              </form>
+              <p id="admin-ytdlp-check" class="hint admin-ytdlp-check hidden"></p>
+              <div id="admin-ytdlp-error" class="error hidden"></div>
+              <div id="admin-ytdlp-ok" class="status-msg hidden"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <div id="modal-preview" class="modal modal-preview-wrap hidden">
+    <div class="modal-backdrop" data-close="modal-preview"></div>
+    <div class="modal-preview-body modal-panel" id="modal-preview-body">
+      <header id="modal-preview-header" class="modal-preview-header hidden">
+        <div id="modal-preview-toolbar" class="modal-preview-actions">
+          <a class="btn ghost sm modal-preview-action-btn" id="modal-preview-download" href="#" download>Download</a>
+          <a class="btn ghost sm modal-preview-action-btn" id="modal-preview-open-tab" href="#" target="_blank" rel="noopener" title="Buka di tab baru">
+            <span class="lbl-wide">Buka tab baru</span><span class="lbl-narrow">Tab baru</span>
+          </a>
+          <button type="button" class="btn ghost sm modal-preview-action-btn modal-preview-close-btn" data-close="modal-preview">Tutup</button>
+        </div>
+        <p id="modal-preview-caption" class="modal-preview-title"></p>
+      </header>
+      <button type="button" class="modal-close modal-close-media" data-close="modal-preview" aria-label="Tutup">×</button>
+      <div id="modal-preview-content" class="modal-preview-content"></div>
+    </div>
+  </div>
+
+  <div id="modal-folder" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-folder"></div>
+    <div class="modal-card modal-panel">
+      <h3>Folder baru</h3>
+      <p class="sub">Sama seperti app desktop — channel privat dengan tag [TD].</p>
+      <label>Nama folder</label>
+      <input type="text" id="new-folder-name" placeholder="Contoh: Dokumen Kerja" maxlength="80">
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close="modal-folder">Batal</button>
+        <button type="button" class="btn" id="btn-create-folder">Buat</button>
+      </div>
+      <div id="folder-create-error" class="error hidden"></div>
+    </div>
+  </div>
+
+  <div id="modal-change-password" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-change-password"></div>
+    <div class="modal-card modal-panel">
+      <h3>Ubah password</h3>
+      <p class="sub">Password akun aplikasi (bukan 2FA Telegram).</p>
+      <form id="form-change-password">
+        <label>Password lama</label>
+        <input type="password" id="pw-current" autocomplete="current-password" required>
+        <label>Password baru</label>
+        <input type="password" id="pw-new" autocomplete="new-password" required minlength="6">
+        <label>Ulangi password baru</label>
+        <input type="password" id="pw-new2" autocomplete="new-password" required minlength="6">
+        <div id="change-password-error" class="error hidden"></div>
+        <div id="change-password-ok" class="status-msg hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-close="modal-change-password">Batal</button>
+          <button type="submit" class="btn" id="btn-change-password">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-flood-wait" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-flood-wait"></div>
+    <div class="modal-card modal-card-warn">
+      <h3>Terlalu cepat untuk Telegram</h3>
+      <p id="flood-wait-message" class="confirm-message"></p>
+      <div class="flood-wait-box">
+        <span class="hint">Coba lagi setelah</span>
+        <strong id="flood-wait-countdown">—</strong>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="btn-flood-wait-ok">Mengerti</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-alert" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-alert"></div>
+    <div class="modal-card modal-panel">
+      <h3 id="alert-title">Info</h3>
+      <p id="alert-message" class="confirm-message"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close="modal-alert">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-notify" class="modal hidden">
+    <div class="modal-backdrop modal-backdrop-locked"></div>
+    <div class="modal-card modal-card-notify notify-success" id="modal-notify-card">
+      <h3 id="notify-title">Berhasil</h3>
+      <p id="notify-message" class="confirm-message"></p>
+      <div class="notify-donate">
+        <p class="hint notify-donate-label">Dukung pengembangan — scan QRIS atau buka Saweria</p>
+        <div class="notify-donate-qr-wrap">
+          <img
+            id="notify-donate-qr"
+            class="notify-donate-qr"
+            src="/api/donation/qr"
+            width="184"
+            height="184"
+            alt="QRIS donasi Saweria"
+            decoding="async"
+          />
+          <p class="hint notify-donate-qr-hint hidden" id="notify-donate-qr-fallback">QR tidak bisa dimuat — pakai link di bawah.</p>
+        </div>
+        <a
+          class="notify-donate-link"
+          href="https://saweria.co/arifianilhamnr"
+          target="_blank"
+          rel="noopener noreferrer"
+        >saweria.co/arifianilhamnr</a>
+      </div>
+      <div class="modal-actions notify-actions">
+        <button type="button" class="btn" id="notify-ok-btn">Siap tuan!</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-transfer" class="modal transfer-modal hidden" aria-live="polite">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card transfer-card">
+      <div class="transfer-spinner" aria-hidden="true"></div>
+      <h3 id="transfer-title">Memproses…</h3>
+      <p id="transfer-detail" class="hint">Mohon tunggu</p>
+      <div class="transfer-progress-wrap">
+        <div class="transfer-progress-bar" id="transfer-progress-bar"></div>
+      </div>
+      <p id="transfer-percent" class="transfer-percent">0%</p>
+    </div>
+  </div>
+
+  <!-- Konfirmasi harus paling akhir agar selalu di atas modal form -->
+  <div id="modal-confirm" class="modal hidden">
+    <div class="modal-backdrop" data-close="modal-confirm"></div>
+    <div class="modal-card modal-panel">
+      <h3 id="confirm-title">Konfirmasi</h3>
+      <p id="confirm-message" class="confirm-message"></p>
+      <div id="confirm-extra" class="confirm-extra hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close="modal-confirm">Batal</button>
+        <button type="button" class="btn" id="confirm-ok">Ya, lanjutkan</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=50"></script>
+</body>
+</html>

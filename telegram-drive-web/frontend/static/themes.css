@@ -1,0 +1,143 @@
+/* Tema: ubah variabel CSS. Tambah tema baru = salin blok [data-theme="nama"] */
+
+:root,
+[data-theme="default"] {
+  --bg: #0b1117;
+  --bg-elevated: #111a24;
+  --surface: #15202b;
+  --surface2: #1c2a38;
+  --border: #2a3d52;
+  --text: #e9f0f7;
+  --muted: #8aa0b8;
+  --accent: #3ea6e8;
+  --accent-dim: #2f8fcc;
+  --accent-glow: rgba(62, 166, 232, 0.15);
+  --danger: #f07178;
+  --ok: #4fd1a5;
+  --warn: #f0b429;
+  --radius: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --scrollbar-track: #0e1621;
+  --scrollbar-thumb: #3a5168;
+  --scrollbar-thumb-hover: #4d6a85;
+  --brand-gradient: linear-gradient(145deg, #3ea6e8, #1e6fa8);
+}
+
+[data-theme="ocean"] {
+  --bg: #071018;
+  --bg-elevated: #0c1a28;
+  --surface: #102433;
+  --surface2: #16304a;
+  --border: #234a6b;
+  --text: #e6f4ff;
+  --muted: #7eb3d8;
+  --accent: #2dd4bf;
+  --accent-dim: #22b8a4;
+  --accent-glow: rgba(45, 212, 191, 0.14);
+  --danger: #fb7185;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --scrollbar-track: #071018;
+  --scrollbar-thumb: #2a5f7a;
+  --scrollbar-thumb-hover: #3d86a8;
+  --brand-gradient: linear-gradient(145deg, #2dd4bf, #0e7490);
+}
+
+[data-theme="dusk"] {
+  --bg: #12101a;
+  --bg-elevated: #1a1628;
+  --surface: #221e32;
+  --surface2: #2c2642;
+  --border: #443d66;
+  --text: #f3efff;
+  --muted: #a89ec9;
+  --accent: #a78bfa;
+  --accent-dim: #8b5cf6;
+  --accent-glow: rgba(167, 139, 250, 0.16);
+  --danger: #f472b6;
+  --ok: #4ade80;
+  --warn: #fcd34d;
+  --scrollbar-track: #12101a;
+  --scrollbar-thumb: #5b4f82;
+  --scrollbar-thumb-hover: #7465a8;
+  --brand-gradient: linear-gradient(145deg, #a78bfa, #6d28d9);
+}
+
+[data-theme="light"] {
+  --bg: #eef2f7;
+  --bg-elevated: #f8fafc;
+  --surface: #ffffff;
+  --surface2: #f1f5f9;
+  --border: #cbd5e1;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --accent-dim: #1d4ed8;
+  --accent-glow: rgba(37, 99, 235, 0.12);
+  --danger: #dc2626;
+  --ok: #059669;
+  --warn: #d97706;
+  --shadow: 0 8px 28px rgba(15, 23, 42, 0.1);
+  --scrollbar-track: #e2e8f0;
+  --scrollbar-thumb: #94a3b8;
+  --scrollbar-thumb-hover: #64748b;
+  --brand-gradient: linear-gradient(145deg, #3b82f6, #1d4ed8);
+}
+
+/* Grunge Rock 90s — Retro Cassette (design.md) */
+[data-theme="retro"] {
+  --bg: #e9e1d4;
+  --bg-elevated: #f3ece2;
+  --surface: #e9e1d4;
+  --surface2: #dfd6c8;
+  --border: #2e2e2e;
+  --text: #2e2e2e;
+  --muted: #7a7a7a;
+  --accent: #b5a642;
+  --accent-dim: #a84700;
+  --accent-glow: rgba(181, 166, 66, 0.35);
+  --danger: #8c2727;
+  --ok: #6b8e23;
+  --warn: #a84700;
+  --radius: 4px;
+  --shadow: 4px 4px 0 #2e2e2e;
+  --scrollbar-track: #dfd6c8;
+  --scrollbar-thumb: #7a7a7a;
+  --scrollbar-thumb-hover: #2e2e2e;
+  --brand-gradient: linear-gradient(145deg, #b5a642, #a84700);
+  --retro-denim: #3b5998;
+  --retro-yellow: #b5a642;
+  --retro-black: #2e2e2e;
+  --retro-paper: #e9e1d4;
+  --retro-red: #8c2727;
+  --retro-orange: #a84700;
+  --hard-shadow: 4px 4px 0 #2e2e2e;
+  --font-grunge: "Courier New", Courier, monospace;
+  --distress-opacity: 0.4;
+}
+
+/* Glassmorphism — frosted glass, latar netral */
+[data-theme="glass"] {
+  --bg: #0f1318;
+  --bg-elevated: rgba(255, 255, 255, 0.05);
+  --surface: rgba(255, 255, 255, 0.07);
+  --surface2: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.14);
+  --text: #e8eaed;
+  --muted: rgba(232, 234, 237, 0.55);
+  --accent: #9aa8b8;
+  --accent-dim: #7d8b9a;
+  --accent-glow: rgba(255, 255, 255, 0.08);
+  --danger: #e57373;
+  --ok: #81c995;
+  --warn: #e6c07b;
+  --radius: 14px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --scrollbar-track: rgba(255, 255, 255, 0.04);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --brand-gradient: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06));
+  --glass-blur: 16px;
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.1);
+}
