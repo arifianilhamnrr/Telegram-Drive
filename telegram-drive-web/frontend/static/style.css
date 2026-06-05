@@ -1279,27 +1279,32 @@ body.pdf-preview-open {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* Image / media preview: make the "window" adapt better on mobile (fuller screen) */
+  /* Image / media preview: make the "window" adapt better on mobile (fuller screen, fits image) */
   .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body {
     width: 100%;
     max-width: 100%;
+    height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
     border: none;
     padding: 0;
     background: #000;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body img,
   .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body video {
     max-height: 100dvh;
     max-width: 100%;
-    width: 100%;
+    width: auto;
     height: auto;
     border-radius: 0;
     box-shadow: none;
     object-fit: contain;
+    flex-shrink: 0;
   }
 
   .modal-preview-wrap:not(.modal-pdf-open) .modal-close-media {
@@ -1999,6 +2004,37 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 #settings-admin-section #admin-ytdlp-error,
 #settings-admin-section #admin-ytdlp-ok {
   margin-top: 0.85rem;
+}
+
+/* Admin LK21 — make the card cleaner & consistent (was reusing ytdlp/donation styles loosely) */
+#settings-admin-lk21-section .settings-admin-box {
+  padding: 0.85rem 1rem 1rem;
+}
+#settings-admin-lk21-section #admin-lk21-status {
+  margin: 0 0 0.65rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+#settings-admin-lk21-section .settings-ytdlp-label {
+  margin-bottom: 0.35rem;
+}
+#settings-admin-lk21-section .settings-ytdlp-actions {
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+#settings-admin-lk21-section .settings-ytdlp-actions .btn {
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.6rem;
+}
+#settings-admin-lk21-section #admin-lk21-error,
+#settings-admin-lk21-section #admin-lk21-ok {
+  margin-top: 0.5rem;
 }
 
 .ytdlp-import-tabs {
