@@ -27,6 +27,7 @@ Versi **web** untuk upload, unduh, dan pratinjau file Telegram lewat browser —
 | **Lokal** | `cd telegram-drive-web && ./run.sh` → http://127.0.0.1:8080 |
 | **Production** | `cd telegram-drive-web && sudo ./install-vps.sh` → systemd `telegram-drive-web` |
 | **Update** | `cd telegram-drive-web && bash update.sh` |
+| **Dukungan** | [saweria.co/arifianilhamnr](https://saweria.co/arifianilhamnr) |
 
 ---
 

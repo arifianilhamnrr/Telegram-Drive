@@ -254,6 +254,14 @@ Lihat [docs/THEMES.md](docs/THEMES.md) untuk menambah tema CSS.
 
 ---
 
+## Dukungan pengembangan
+
+Kalau aplikasi ini membantu Anda, dukungan lewat Saweria sangat dihargai:
+
+**[saweria.co/arifianilhamnr](https://saweria.co/arifianilhamnr)**
+
+---
+
 ## Lisensi
 
 Proyek ini merupakan bagian / fork pengembangan **Telegram Drive**. Sesuaikan lisensi dengan repositori induk Anda.
