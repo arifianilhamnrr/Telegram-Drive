@@ -17,6 +17,19 @@ your Telegram account into an unlimited, secure cloud storage drive. Built with
 
 ![Auth Screen](screenshots/AuthScreen.png)
 
+## Telegram Drive Web (browser / VPS)
+
+Versi **web** untuk upload, unduh, dan pratinjau file Telegram lewat browser — deploy di laptop atau VPS dengan FastAPI + Telethon.
+
+| | |
+|---|---|
+| **Dokumentasi lengkap** | **[telegram-drive-web/README.md](telegram-drive-web/README.md)** — fitur, `.env`, instalasi lokal & production |
+| **Lokal** | `cd telegram-drive-web && ./run.sh` → http://127.0.0.1:8080 |
+| **Production** | `cd telegram-drive-web && sudo ./install-vps.sh` → systemd `telegram-drive-web` |
+| **Update** | `cd telegram-drive-web && bash update.sh` |
+
+---
+
 ##  What is Telegram Drive?
 
 Telegram Drive leverages the Telegram API to allow you to upload, organize, and manage files directly on Telegram's servers. It treats your "Saved Messages" and created Channels as folders, giving you a familiar file explorer interface for your Telegram cloud.
