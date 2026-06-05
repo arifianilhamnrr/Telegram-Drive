@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from fastapi import Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+
+import io
 
 SERVE_MIME_BY_EXT = {
     "mov": "video/quicktime",
@@ -59,6 +61,87 @@ def preview_inline_allowed(mime: str, filename: str) -> bool:
     if ext in VIDEO_EXTENSIONS:
         return True
     return (filename or "").lower().endswith(".pdf")
+
+
+# --- HEIC / HEIF preview conversion support (for browser <img> compatibility) ---
+HEIC_EXTS = {".heic", ".heif", ".hif"}
+
+try:
+    from PIL import Image
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    _HAS_PIL_HEIF = True
+except Exception:
+    _HAS_PIL_HEIF = False
+
+
+def is_heic_filename(filename: str) -> bool:
+    ext = Path(filename or "").suffix.lower()
+    return ext in HEIC_EXTS
+
+
+async def _collect_full_bytes(stream_factory) -> bytes:
+    """Collect entire stream (used for HEIC conversion on preview)."""
+    chunks: list[bytes] = []
+    async for chunk in stream_factory(0, None):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def convert_heic_bytes_to_jpeg(data: bytes, quality: int = 86) -> bytes:
+    """Convert HEIC bytes to JPEG. Falls back to original data on error."""
+    if not _HAS_PIL_HEIF or not data:
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            if im.mode in ("RGBA", "LA", "P", "LA"):
+                im = im.convert("RGB")
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=quality, optimize=True)
+            return out.getvalue()
+    except Exception:
+        return data
+
+
+async def build_preview_response(
+    request: Request,
+    *,
+    filename: str,
+    mime: str,
+    size: int,
+    stream_factory,
+) -> Response | StreamingResponse:
+    """Like build_media_response but converts HEIC/HEIF to JPEG for <img> preview."""
+    if is_heic_filename(filename):
+        if _HAS_PIL_HEIF and size < 45_000_000:  # safety: avoid huge memory spikes on giant HEIC
+            try:
+                raw = await _collect_full_bytes(stream_factory)
+                if raw:
+                    jpeg_data = convert_heic_bytes_to_jpeg(raw)
+                    # Serve as .jpg so filename in disposition is friendly, bytes are JPEG
+                    stem = Path(filename).stem
+                    disp_name = f"{stem}.jpg" if stem else "preview.jpg"
+                    return Response(
+                        jpeg_data,
+                        media_type="image/jpeg",
+                        headers={
+                            "Content-Disposition": content_disposition(disp_name, inline=True),
+                            "Cache-Control": "private, max-age=86400",
+                            "X-Converted-From": "heic",
+                        },
+                    )
+            except Exception:
+                pass  # fallthrough to raw HEIC (won't render in most browsers)
+    # default: original behavior (works for jpg/png/webp etc and videos)
+    return await build_media_response(
+        request,
+        filename=filename,
+        mime=mime,
+        size=size,
+        stream_factory=stream_factory,
+        inline=True,
+    )
 
 
 def parse_range_header(range_header: Optional[str], size: int) -> Optional[tuple[int, int]]:

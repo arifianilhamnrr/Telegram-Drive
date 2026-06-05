@@ -572,6 +572,30 @@ button.brand-icon .brand-mark-close {
   color: var(--text);
 }
 
+.share-upload-block {
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.share-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 !important;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.share-check-row input {
+  margin-top: 0.2rem;
+}
+
+.share-upload-expiry-wrap {
+  margin-top: 0.5rem;
+}
+
 .share-create-result {
   margin-top: 1rem;
   padding-top: 0.85rem;
@@ -1047,13 +1071,15 @@ button.brand-icon .brand-mark-close {
 .modal-preview-wrap .modal-preview-body {
   position: relative;
   z-index: 1;
+  width: fit-content;
   max-width: min(92vw, 900px);
   max-height: 90vh;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 1rem;
+  padding: 0.6rem;
   overflow: auto;
+  box-sizing: border-box;
 }
 
 .modal-preview-wrap .modal-preview-body.modal-panel {
@@ -1064,11 +1090,14 @@ button.brand-icon .brand-mark-close {
 .modal-preview-body video,
 .modal-preview-video {
   max-width: 100%;
-  max-height: 75vh;
+  max-height: 78vh;
+  width: auto;
+  height: auto;
   display: block;
   margin: 0 auto;
   border-radius: 8px;
-  background: #000;
+  background: #111;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
 .modal-preview-content.modal-preview-media {
@@ -1248,6 +1277,36 @@ body.pdf-preview-open {
 
   .modal-preview-content.is-pdf-viewer {
     padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Image / media preview: make the "window" adapt better on mobile (fuller screen) */
+  .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+    padding: 0;
+    background: #000;
+    overflow: hidden;
+  }
+
+  .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body img,
+  .modal-preview-wrap:not(.modal-pdf-open) .modal-preview-body video {
+    max-height: 100dvh;
+    max-width: 100%;
+    width: 100%;
+    height: auto;
+    border-radius: 0;
+    box-shadow: none;
+    object-fit: contain;
+  }
+
+  .modal-preview-wrap:not(.modal-pdf-open) .modal-close-media {
+    top: max(0.4rem, env(safe-area-inset-top, 0.4rem));
+    right: 0.4rem;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
   }
 }
 
@@ -2300,6 +2359,10 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
   width: min(100%, 22rem);
   text-align: center;
   padding: 1.5rem 1.25rem 1.25rem;
+}
+
+.transfer-cancel-btn {
+  margin-top: 0.85rem;
 }
 
 .transfer-spinner {

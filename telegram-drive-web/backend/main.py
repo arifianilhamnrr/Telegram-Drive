@@ -8,7 +8,17 @@ from typing import List, Literal, Optional
 from .file_filters import file_category
 
 import httpx
-from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Cookie,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -37,7 +47,7 @@ from .deps import (
     require_user,
 )
 from .errors import http_exception_from_value
-from .media_stream import build_media_response, preview_inline_allowed
+from .media_stream import build_media_response, build_preview_response, preview_inline_allowed
 from .telegram_mgr import _fmt_size, mgr
 from .url_fetcher import fetch_import_to_bytes, normalize_import_url, probe_import_filename
 from .ytdlp_fetcher import (
@@ -48,6 +58,14 @@ from .ytdlp_fetcher import (
     ytdlp_cookies_status,
 )
 from .donation_qr import build_donation_qr_png
+from .lk21_client import Lk21ApiError, list_movies, movie_detail, resolve_stream, search_movies
+from .movie_telegram_save import (
+    download_hls_to_temp,
+    resolve_m3u8_for_save,
+    sanitize_movie_filename,
+)
+from .lk21_domain import discover_base_url, get_lk21_domain_status, set_lk21_base_manual
+from .lk21_hls_proxy import proxy_hls_request
 from .donation_settings import (
     admin_donation_view,
     get_public_donation_info,
@@ -56,6 +74,7 @@ from .donation_settings import (
 )
 from .share_access import (
     assert_share_active,
+    assert_share_allows_upload,
     check_share_file_target,
     parse_share_access_cookie,
     require_share_unlocked,
@@ -173,6 +192,19 @@ class AdminDonationBody(BaseModel):
     enabled: bool = True
 
 
+class AdminLk21Body(BaseModel):
+    base_url: str = Field(default="", max_length=500)
+
+
+class MovieSaveTelegramBody(BaseModel):
+    folder_id: int = 0
+    m3u8: str = Field(default="", max_length=8000)
+    referer: str = Field(default="", max_length=8000)
+    title: str = Field(default="film", max_length=120)
+    iframe_url: str = Field(default="", max_length=8000)
+    movie_url: str = Field(default="", max_length=8000)
+
+
 class ShareCreateBody(BaseModel):
     share_type: Literal["file", "folder"]
     folder_id: int = 0
@@ -181,6 +213,7 @@ class ShareCreateBody(BaseModel):
     password: Optional[str] = None
     expires_in_hours: Optional[int] = None
     title: Optional[str] = Field(default=None, max_length=120)
+    allow_upload: bool = False
 
 
 class ShareUpdateBody(BaseModel):
@@ -191,6 +224,7 @@ class ShareUpdateBody(BaseModel):
     expires_in_hours: Optional[int] = None
     clear_expiry: bool = False
     title: Optional[str] = Field(default=None, max_length=120)
+    allow_upload: Optional[bool] = None
 
 
 class SharePasswordBody(BaseModel):
@@ -235,6 +269,8 @@ async def public_config(store: UserStore = Depends(get_user_store)):
         "ytdlp_available": ytdlp_available(),
         "ytdlp_cookies": ytdlp_cookies_status(),
         "donation": get_public_donation_info(),
+        "movies_available": True,
+        "lk21": get_lk21_domain_status(),
     }
 
 
@@ -385,6 +421,44 @@ async def admin_ytdlp_cookies_upload(
 async def admin_ytdlp_cookies_delete(_: User = Depends(require_admin)):
     delete_cookies_file()
     return {"ok": True, "message": "Cookies dihapus", **ytdlp_cookies_status()}
+
+
+@app.get("/api/admin/lk21")
+async def admin_lk21_get(_: User = Depends(require_admin)):
+    status = get_lk21_domain_status()
+    base = status.get("base_url")
+    if not base:
+        base = await discover_base_url()
+        status = get_lk21_domain_status()
+    return {"ok": True, **status, "base_url": base}
+
+
+@app.post("/api/admin/lk21/refresh-domain")
+async def admin_lk21_refresh_domain(_: User = Depends(require_admin)):
+    base = await discover_base_url(force=True)
+    return {
+        "ok": True,
+        "message": "Domain LK21 diperbarui",
+        "base_url": base,
+        **get_lk21_domain_status(),
+    }
+
+
+@app.post("/api/admin/lk21")
+async def admin_lk21_set_base(body: AdminLk21Body, _: User = Depends(require_admin)):
+    url = (body.base_url or "").strip()
+    if not url:
+        raise HTTPException(400, "base_url wajib")
+    try:
+        base = set_lk21_base_manual(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "ok": True,
+        "message": "Domain LK21 disimpan",
+        "base_url": base,
+        **get_lk21_domain_status(),
+    }
 
 
 @app.post("/api/admin/ytdlp-cookies/test")
@@ -749,13 +823,12 @@ async def preview(
             sid, folder_id, message_id, offset=offset, byte_limit=byte_limit
         )
 
-    return await build_media_response(
+    return await build_preview_response(
         request,
         filename=name,
         mime=mime,
         size=size,
         stream_factory=stream_at,
-        inline=True,
     )
 
 
@@ -880,6 +953,204 @@ async def _load_public_share(
     return share, owner
 
 
+@app.get("/api/movies/lk21/status")
+async def movies_lk21_status(user: User = Depends(require_user)):
+    status = get_lk21_domain_status()
+    base = status.get("base_url")
+    if not base:
+        base = await discover_base_url()
+        status = get_lk21_domain_status()
+    return {"ok": True, **status, "base_url": base}
+
+
+@app.get("/api/movies/lk21/list")
+async def movies_lk21_list(
+    kind: str = "new",
+    page: int = 1,
+    user: User = Depends(require_user),
+):
+    try:
+        return await list_movies(kind, page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Lk21ApiError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/lk21/search")
+async def movies_lk21_search(
+    q: str = "",
+    page: int = 1,
+    user: User = Depends(require_user),
+):
+    try:
+        return await search_movies(q, page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Lk21ApiError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/lk21/detail")
+async def movies_lk21_detail(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await movie_detail(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Lk21ApiError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman film: {e}") from e
+
+
+@app.get("/api/movies/lk21/stream")
+async def movies_lk21_stream(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await resolve_stream(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Lk21ApiError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/lk21/hls")
+async def movies_lk21_hls(
+    u: str = "",
+    r: str = "",
+    user: User = Depends(require_user),
+):
+    if not (u or "").strip():
+        raise HTTPException(400, "u wajib")
+    return await proxy_hls_request(
+        upstream_url=u.strip(),
+        referer=(r or "").strip(),
+        proxy_path="/api/movies/lk21/hls",
+    )
+
+
+@app.post("/api/movies/lk21/save-to-telegram")
+async def movies_lk21_save_to_telegram(
+    body: MovieSaveTelegramBody,
+    user: User = Depends(require_user),
+):
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def worker() -> None:
+        tmp_path = None
+        try:
+            title = (body.title or "film").strip()
+
+            await queue.put(
+                {
+                    "event": "progress",
+                    "phase": "resolve",
+                    "message": "Menyiapkan link stream…",
+                }
+            )
+            m3u8, referer = await resolve_m3u8_for_save(
+                m3u8=body.m3u8,
+                referer=body.referer,
+                iframe_url=body.iframe_url,
+                movie_url=body.movie_url,
+            )
+
+            await queue.put(
+                {
+                    "event": "progress",
+                    "phase": "download",
+                    "loaded": 0,
+                    "total": None,
+                    "message": "Mengunduh film (ffmpeg)…",
+                }
+            )
+
+            async def on_dl(loaded: int, total: Optional[int]) -> None:
+                await queue.put(
+                    {
+                        "event": "progress",
+                        "phase": "download",
+                        "loaded": loaded,
+                        "total": total,
+                    }
+                )
+
+            filename = sanitize_movie_filename(title)
+            tmp_path, size = await download_hls_to_temp(
+                m3u8, referer, filename, on_progress=on_dl
+            )
+
+            await queue.put(
+                {
+                    "event": "progress",
+                    "phase": "telegram",
+                    "loaded": size,
+                    "total": size,
+                    "message": "Mengunggah ke Telegram…",
+                }
+            )
+            result = await mgr.upload_file_path(
+                user.telegram_sid,
+                body.folder_id,
+                filename,
+                tmp_path,
+            )
+            tmp_path = None
+            await queue.put(
+                {
+                    "event": "done",
+                    "ok": True,
+                    "file": result,
+                    "bytes": size,
+                    "folder_id": body.folder_id,
+                }
+            )
+        except ValueError as e:
+            await queue.put({"event": "error", "message": str(e)})
+        except Lk21ApiError as e:
+            await queue.put({"event": "error", "message": str(e)})
+        except Exception as e:
+            await queue.put({"event": "error", "message": f"Gagal menyimpan film: {e}"})
+        finally:
+            if tmp_path:
+                from pathlib import Path
+
+                Path(tmp_path).unlink(missing_ok=True)
+            await queue.put(None)
+
+    task = asyncio.create_task(worker())
+
+    async def event_stream():
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    yield 'data: {"event":"end"}\n\n'
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            await task
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/shares")
 async def create_share(
     body: ShareCreateBody,
@@ -897,6 +1168,7 @@ async def create_share(
             password=body.password,
             expires_in_hours=body.expires_in_hours,
             title=body.title,
+            allow_upload=body.allow_upload,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -944,6 +1216,7 @@ async def update_share(
             expires_in_hours=body.expires_in_hours,
             clear_expiry=body.clear_expiry,
             title=body.title,
+            allow_upload=body.allow_upload,
         )
     except ValueError as e:
         msg = str(e)
@@ -987,10 +1260,10 @@ async def public_share_info(
     if not share_store.is_active(share):
         raise HTTPException(410, "share_expired_or_disabled")
     unlocked = not share.password_hash or parse_share_access_cookie(token, td_share_access)
-    return {
-        "ok": True,
-        **share_to_public_dict(share, password_required=bool(share.password_hash) and not unlocked),
-    }
+    pub = share_to_public_dict(share, password_required=bool(share.password_hash) and not unlocked)
+    if pub.get("allows_upload"):
+        pub["max_upload_mb"] = MAX_UPLOAD_BYTES // (1024 * 1024)
+    return {"ok": True, **pub}
 
 
 @app.post("/api/public/s/{token}/unlock")
@@ -1099,8 +1372,8 @@ async def public_share_preview(
             sid, share.folder_id, message_id, offset=offset, byte_limit=byte_limit
         )
 
-    return await build_media_response(
-        request, filename=name, mime=mime, size=size, stream_factory=stream_at, inline=True
+    return await build_preview_response(
+        request, filename=name, mime=mime, size=size, stream_factory=stream_at
     )
 
 
@@ -1173,6 +1446,38 @@ async def public_share_bulk_download(
         media_type="application/zip",
         filename=f"share-{token[:8]}-{len(body.message_ids)}files.zip",
     )
+
+
+@app.post("/api/public/s/{token}/upload")
+async def public_share_upload(
+    token: str,
+    files: List[UploadFile] = File(...),
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    assert_share_allows_upload(share)
+    if not files:
+        raise HTTPException(400, "Tidak ada file")
+    items = []
+    max_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+    for f in files:
+        data = await f.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"File terlalu besar (maks {max_mb} MB)")
+        name = (f.filename or "file.bin").strip()
+        items.append((name, data))
+    try:
+        result = await mgr.upload_files_bulk(owner.telegram_sid, share.folder_id, items)
+    except ValueError as e:
+        msg = str(e)
+        if msg in ("not_authenticated", "telegram_required"):
+            raise HTTPException(401, "telegram_unavailable") from e
+        raise HTTPException(400, msg) from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+    return {"ok": True, **result}
 
 
 @app.get("/", response_class=HTMLResponse)
