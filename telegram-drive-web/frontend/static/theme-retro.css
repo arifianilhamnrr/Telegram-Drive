@@ -188,6 +188,15 @@
   transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
 }
 
+/* Compact action buttons in file cards (share/download/delete) — prevent overflow on desktop */
+[data-theme="retro"] .file-card-actions .btn {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 0.65rem;
+  padding: 0.18rem 0.4rem;
+  border-width: 1px;
+}
+
 [data-theme="retro"] .btn:hover:not(:disabled) {
   background: var(--retro-orange);
   color: var(--retro-paper);

@@ -1416,6 +1416,9 @@ body.pdf-preview-open {
   flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.68rem;
+  line-height: 1.1;
 }
 
 .empty {
