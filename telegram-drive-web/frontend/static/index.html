@@ -12,10 +12,11 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/themes.css?v=54">
-  <link rel="stylesheet" href="/static/style.css?v=54">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=54">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=54">
+  <link rel="stylesheet" href="/static/themes.css?v=67">
+  <link rel="stylesheet" href="/static/style.css?v=67">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=67">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=67">
+  <link rel="stylesheet" href="/static/movies.css?v=67">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -118,6 +119,10 @@
             <span class="sidebar-menu-icon">📁</span>
             <span>Drive</span>
           </button>
+          <button type="button" class="sidebar-menu-item" data-panel="movies" id="nav-movies">
+            <span class="sidebar-menu-icon">🎬</span>
+            <span>Movie</span>
+          </button>
           <button type="button" class="sidebar-menu-item" data-panel="settings" id="nav-settings">
             <span class="sidebar-menu-icon">⚙</span>
             <span>Pengaturan</span>
@@ -149,6 +154,9 @@
         </div>
         <div class="topbar-actions" id="topbar-actions-drive">
           <button type="button" class="btn" id="btn-open-upload">Tambah file</button>
+        </div>
+        <div class="topbar-actions hidden" id="topbar-actions-movies">
+          <button type="button" class="btn ghost sm hidden" id="btn-movies-back">← Kembali</button>
         </div>
       </header>
 
@@ -191,6 +199,56 @@
         </section>
       </div>
 
+      <div id="panel-movies" class="app-panel content scroll-area hidden">
+        <section class="card movies-card" id="movies-browse">
+          <div class="movies-toolbar">
+            <div class="movie-tabs" role="tablist" aria-label="Kategori film">
+              <button type="button" class="movie-tab active" data-movie-kind="new">Terbaru</button>
+              <button type="button" class="movie-tab" data-movie-kind="populer">Populer</button>
+              <button type="button" class="movie-tab" data-movie-kind="home">Rilis</button>
+            </div>
+            <form id="form-movie-search" class="movies-search-form">
+              <input type="search" id="movie-search-input" placeholder="Cari judul film…" autocomplete="off" maxlength="80">
+              <button type="submit" class="btn sm">Cari</button>
+            </form>
+          </div>
+          <p id="movies-list-hint" class="hint movies-list-hint"></p>
+          <div id="movies-loading" class="movies-state">Memuat film…</div>
+          <div id="movies-error" class="movies-state error hidden"></div>
+          <div id="movies-grid" class="movies-grid hidden"></div>
+          <div id="movies-pagination" class="movies-pagination hidden"></div>
+        </section>
+
+        <section class="card movies-card hidden" id="movies-detail">
+          <div class="movies-detail-head">
+            <button type="button" class="btn ghost sm" id="btn-movies-back-detail">← Daftar film</button>
+          </div>
+          <div class="movies-detail-layout">
+            <div class="movies-detail-poster-wrap">
+              <img id="movie-detail-poster" class="movies-detail-poster" alt="" loading="lazy">
+            </div>
+            <div class="movies-detail-meta">
+              <h2 id="movie-detail-title" class="movies-detail-title">—</h2>
+              <p id="movie-detail-sub" class="hint"></p>
+              <p id="movie-detail-synopsis" class="movies-detail-synopsis hidden"></p>
+              <div class="movies-server-label">Pilih server</div>
+              <div id="movie-servers" class="movies-servers"></div>
+              <div class="movies-save-telegram-wrap">
+                <button type="button" class="btn sm" id="btn-movie-save-telegram" disabled>
+                  Simpan ke Telegram
+                </button>
+                <p class="hint movies-save-hint">Simpan ke Telegram butuh stream HLS (TurboVIP). Mirror WP biasanya embed P2P saja.</p>
+              </div>
+            </div>
+          </div>
+          <div class="movies-player-wrap">
+            <video id="movie-player" class="movies-player" controls playsinline></video>
+            <iframe id="movie-player-embed" class="movies-player-embed hidden" title="Pemutar film" allow="autoplay; fullscreen; encrypted-media" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe>
+            <p id="movie-player-status" class="hint movies-player-status">Pilih server untuk mulai menonton.</p>
+          </div>
+        </section>
+      </div>
+
       <div id="panel-settings" class="app-panel content scroll-area hidden">
         <div class="settings-page">
           <section class="card settings-section">
@@ -203,6 +261,7 @@
           <section class="card settings-section">
             <h3>Akun</h3>
             <p class="hint settings-account-user">Login sebagai <strong id="settings-account-name">—</strong></p>
+            <p id="settings-admin-hint" class="hint hidden">Akun admin — bagian pengaturan LK21 &amp; QRIS ada di bawah.</p>
             <button type="button" class="btn ghost sm" id="btn-open-change-password">Ubah password</button>
           </section>
 
@@ -262,6 +321,29 @@
               <p id="admin-donation-status" class="hint settings-telegram-status admin-donation-status">Memuat…</p>
               <div id="admin-donation-error" class="error hidden"></div>
               <div id="admin-donation-ok" class="status-msg hidden"></div>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-lk21-section" hidden aria-hidden="true">
+            <h3>Admin — LK21 Movie</h3>
+            <p class="sub">Sumber scrape utama: <strong>bridgestoabrighterfuture.org</strong> (WordPress). Bisa ditambah / diganti ke tvN.lk21official.* lewat URL manual di bawah.</p>
+            <div class="settings-admin-box">
+              <p id="admin-lk21-status" class="hint settings-telegram-status">Memuat…</p>
+              <label class="settings-ytdlp-label" for="admin-lk21-base-url">Domain aktif (manual)</label>
+              <input
+                type="url"
+                id="admin-lk21-base-url"
+                class="settings-donation-input"
+                placeholder="https://tv10.lk21official.cc"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <div class="settings-ytdlp-actions">
+                <button type="button" class="btn sm" id="btn-admin-lk21-refresh">Refresh domain otomatis</button>
+                <button type="button" class="btn ghost sm" id="btn-admin-lk21-save">Simpan manual</button>
+              </div>
+              <div id="admin-lk21-error" class="error hidden"></div>
+              <div id="admin-lk21-ok" class="status-msg hidden"></div>
             </div>
           </section>
 
@@ -388,13 +470,34 @@
         </select>
         <label for="share-password">Password link <span class="hint">(opsional)</span></label>
         <input type="password" id="share-password" autocomplete="new-password" placeholder="Kosongkan jika tidak perlu">
-        <label for="share-expiry">Masa berlaku</label>
+        <label for="share-expiry" id="share-expiry-label">Masa berlaku link</label>
         <select id="share-expiry" class="share-select">
           <option value="">Tanpa batas</option>
+          <option value="1">1 jam</option>
+          <option value="6">6 jam</option>
           <option value="24">24 jam</option>
+          <option value="72">3 hari</option>
           <option value="168">7 hari</option>
           <option value="720">30 hari</option>
         </select>
+        <div id="share-upload-block" class="share-upload-block hidden">
+          <label class="share-check-row">
+            <input type="checkbox" id="share-allow-upload">
+            <span>Izinkan pengunjung mengunggah file <span class="hint">(drop zone, seperti Google Drive)</span></span>
+          </label>
+          <div id="share-upload-expiry-wrap" class="share-upload-expiry-wrap hidden">
+            <label for="share-upload-expiry">Masa berlaku link upload</label>
+            <select id="share-upload-expiry" class="share-select">
+              <option value="1">1 jam</option>
+              <option value="6">6 jam</option>
+              <option value="24" selected>24 jam</option>
+              <option value="72">3 hari</option>
+              <option value="168">7 hari</option>
+              <option value="720">30 hari</option>
+            </select>
+            <p class="hint">Link upload wajib punya batas waktu — tidak bisa tanpa batas.</p>
+          </div>
+        </div>
         <button type="submit" class="btn" id="btn-create-share-submit">Buat link baru</button>
       </form>
       <div id="share-create-result" class="share-create-result hidden">
@@ -503,8 +606,25 @@
     </div>
   </div>
 
+  <div id="modal-movie-save" class="modal hidden" aria-labelledby="modal-movie-save-title">
+    <div class="modal-backdrop" data-close="modal-movie-save"></div>
+    <div class="modal-card modal-panel modal-movie-save-card">
+      <button type="button" class="modal-close" data-close="modal-movie-save" aria-label="Tutup">×</button>
+      <h3 id="modal-movie-save-title">Simpan film ke Telegram</h3>
+      <p class="hint" id="movie-save-film-title">—</p>
+      <p class="sub">Pilih folder tujuan — sama seperti upload file di Drive.</p>
+      <div id="movie-save-folder-list" class="movie-save-folder-list scroll-area" role="listbox" aria-label="Folder"></div>
+      <div id="movie-save-folder-loading" class="hint">Memuat folder…</div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close="modal-movie-save">Batal</button>
+        <button type="button" class="btn" id="btn-movie-save-start" disabled>Simpan ke folder</button>
+      </div>
+      <div id="movie-save-error" class="error hidden"></div>
+    </div>
+  </div>
+
   <div id="modal-transfer" class="modal transfer-modal hidden" aria-live="polite">
-    <div class="modal-backdrop"></div>
+    <div class="modal-backdrop" data-close="modal-transfer"></div>
     <div class="modal-card transfer-card">
       <div class="transfer-spinner" aria-hidden="true"></div>
       <h3 id="transfer-title">Memproses…</h3>
@@ -513,6 +633,7 @@
         <div class="transfer-progress-bar" id="transfer-progress-bar"></div>
       </div>
       <p id="transfer-percent" class="transfer-percent">0%</p>
+      <button type="button" class="btn ghost sm transfer-cancel-btn" id="btn-transfer-cancel">Tutup</button>
     </div>
   </div>
 
@@ -530,6 +651,8 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=54"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js" crossorigin="anonymous"></script>
+  <script src="/static/app.js?v=68"></script>
+  <script src="/static/movies.js?v=68"></script>
 </body>
 </html>
