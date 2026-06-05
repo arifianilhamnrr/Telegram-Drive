@@ -2148,26 +2148,23 @@ function updateFileCountLabel() {
 }
 
 function renderFilesPagination() {
-  const top = $("#files-pagination-top");
   const bottom = $("#files-pagination-bottom");
   const pages = filesListMeta.total_pages || 1;
   const page = filesListMeta.page || 1;
   const total = filesListMeta.total || 0;
 
   if (!total || pages <= 1) {
-    hide(top);
     hide(bottom);
-    if (top) top.innerHTML = "";
     if (bottom) bottom.innerHTML = "";
     return;
   }
 
-  const html = buildPaginationHtml(page, pages);
-  [top, bottom].forEach((el) => {
-    if (!el) return;
-    el.innerHTML = html;
-    show(el);
-    el.querySelectorAll("[data-page]").forEach((btn) => {
+  const isMobile = window.innerWidth < 640;
+  const html = buildPaginationHtml(page, pages, isMobile);
+  if (bottom) {
+    bottom.innerHTML = html;
+    show(bottom);
+    bottom.querySelectorAll("[data-page]").forEach((btn) => {
       btn.onclick = () => {
         const p = parseInt(btn.dataset.page, 10);
         if (!Number.isFinite(p) || p === filesPage) return;
@@ -2176,24 +2173,53 @@ function renderFilesPagination() {
         loadFiles(currentFolderId);
       };
     });
-  });
+  }
 }
 
-function buildPaginationHtml(page, pages) {
+function buildPaginationHtml(page, pages, isMobile = false) {
   const prev = page > 1 ? page - 1 : null;
   const next = page < pages ? page + 1 : null;
-  const nums = [];
-  const window = 2;
+  let nums = [];
+
+  // Desktop: window of 2 around current (up to ~5 numbers)
+  // Mobile: window of 1, and further compact to max ~3 numbers total for one-line neatness
+  const win = isMobile ? 1 : 2;
   for (let p = 1; p <= pages; p += 1) {
-    if (p === 1 || p === pages || (p >= page - window && p <= page + window)) {
+    if (p === 1 || p === pages || (p >= page - win && p <= page + win)) {
       nums.push(p);
     } else if (nums[nums.length - 1] !== "…") {
       nums.push("…");
     }
   }
+
+  if (isMobile) {
+    // Further compact on mobile: always show first, a window around current, last. Max ~3 numbers.
+    // Examples: 1 2 ... 8   or  1 ... 7 8   or 1 2 3 ... 8  etc. Keeps single line.
+    const compactNums = [];
+    if (pages >= 1) compactNums.push(1);
+    const cStart = Math.max(2, Math.min(page - 1, pages - 2));
+    const cEnd = Math.min(pages - 1, Math.max(page + 1, 3));
+    if (cStart > 2 && compactNums[compactNums.length - 1] !== "…") compactNums.push("…");
+    for (let p = cStart; p <= cEnd; p++) {
+      if (!compactNums.includes(p)) compactNums.push(p);
+    }
+    if (pages > 1 && !compactNums.includes(pages)) {
+      if (compactNums[compactNums.length - 1] !== "…") compactNums.push("…");
+      compactNums.push(pages);
+    }
+    // remove duplicate consecutive …
+    nums = [];
+    compactNums.forEach((n) => {
+      if (n === "…" && nums[nums.length - 1] === "…") return;
+      nums.push(n);
+    });
+  }
+
   const parts = [];
+  const prevLabel = isMobile ? "←" : "← Sebelumnya";
+  const nextLabel = isMobile ? "→" : "Berikutnya →";
   parts.push(
-    `<button type="button" class="btn ghost sm page-btn" data-page="${prev || ""}" ${prev ? "" : "disabled"}>← Sebelumnya</button>`
+    `<button type="button" class="btn ghost sm page-btn" data-page="${prev || ""}" ${prev ? "" : "disabled"} title="Sebelumnya">${prevLabel}</button>`
   );
   nums.forEach((n) => {
     if (n === "…") {
@@ -2206,7 +2232,7 @@ function buildPaginationHtml(page, pages) {
     );
   });
   parts.push(
-    `<button type="button" class="btn ghost sm page-btn" data-page="${next || ""}" ${next ? "" : "disabled"}>Berikutnya →</button>`
+    `<button type="button" class="btn ghost sm page-btn" data-page="${next || ""}" ${next ? "" : "disabled"} title="Berikutnya">${nextLabel}</button>`
   );
   return `<div class="files-pagination-inner">${parts.join("")}</div>`;
 }

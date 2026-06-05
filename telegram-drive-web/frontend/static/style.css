@@ -933,6 +933,33 @@ button.brand-icon .brand-mark-close {
   gap: 0.35rem;
 }
 
+/* Mobile: icons only (labels are short), force single line, compact */
+@media (max-width: 640px) {
+  .files-pagination {
+    margin: 0.4rem 0 0.1rem;
+  }
+  .files-pagination-inner {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .files-pagination-inner::-webkit-scrollbar {
+    display: none;
+  }
+  .files-pagination .btn.ghost.sm.page-btn,
+  .files-pagination .btn.ghost.sm.page-num {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    min-width: 28px;
+  }
+  .page-ellipsis {
+    padding: 0 0.1rem;
+    font-size: 0.9rem;
+  }
+}
+
 .files-pagination .page-num.active {
   background: var(--accent);
   border-color: var(--accent);
