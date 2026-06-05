@@ -12,10 +12,10 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/static/themes.css?v=50">
-  <link rel="stylesheet" href="/static/style.css?v=50">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=50">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=50">
+  <link rel="stylesheet" href="/static/themes.css?v=51">
+  <link rel="stylesheet" href="/static/style.css?v=51">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=51">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=51">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -148,52 +148,13 @@
           <p class="hint" id="file-count">0 file</p>
         </div>
         <div class="topbar-actions" id="topbar-actions-drive">
+          <button type="button" class="btn" id="btn-open-upload">Tambah file</button>
+          <button type="button" class="btn ghost" id="btn-open-import-url" title="Import dari link">Import link</button>
           <button type="button" class="btn ghost" id="btn-refresh">Refresh</button>
         </div>
       </header>
 
       <div id="panel-drive" class="app-panel content scroll-area">
-        <section class="card upload-card">
-          <h3>Tambah file ke folder</h3>
-          <p class="hint upload-target">Tujuan: <span id="upload-target-name">Saved Messages</span></p>
-
-          <div class="ingest-tabs" role="tablist">
-            <button type="button" class="ingest-tab active" data-ingest="file" id="ingest-tab-file">Upload file</button>
-            <button type="button" class="ingest-tab" data-ingest="url" id="ingest-tab-url">Import link</button>
-          </div>
-
-          <div id="ingest-panel-file" class="ingest-panel">
-            <div class="dropzone" id="dropzone">
-              <input type="file" id="file-input" multiple>
-              <div class="dropzone-inner" id="dropzone-inner">
-                <span class="dropzone-icon">↑</span>
-                <p>Seret file ke sini atau klik untuk memilih</p>
-                <p class="hint" id="upload-label">Belum ada file dipilih (bisa banyak sekaligus)</p>
-                <p class="hint upload-limit-hint" id="upload-limit-hint">Maksimal per file: memuat…</p>
-              </div>
-              <div id="upload-preview" class="upload-preview hidden"></div>
-            </div>
-            <p id="upload-size-warn" class="error upload-size-warn hidden"></p>
-            <div class="upload-actions">
-              <button type="button" class="btn" id="btn-upload">Upload</button>
-            </div>
-            <div id="upload-status" class="status-msg hidden"></div>
-          </div>
-
-          <div id="ingest-panel-url" class="ingest-panel hidden">
-            <p class="hint">Direct link atau Google Drive (file publik / bisa diunduh).</p>
-            <p class="hint" id="import-limit-hint">Maksimal unduhan server: memuat…</p>
-            <label>URL unduhan</label>
-            <input type="url" id="import-url" placeholder="https://… link Drive atau direct download">
-            <label>Nama file <span class="hint">(otomatis dari link, bisa diubah)</span></label>
-            <input type="text" id="import-filename" placeholder="Tempel URL — nama file terisi otomatis" maxlength="200" autocomplete="off">
-            <p class="hint hidden" id="import-filename-hint"></p>
-            <button type="button" class="btn" id="btn-import-url">Unduh &amp; simpan ke Telegram</button>
-            <div id="import-url-status" class="status-msg hidden"></div>
-            <div id="import-url-error" class="error hidden"></div>
-          </div>
-        </section>
-
         <section class="card files-card">
           <div class="files-head">
             <h3>File di folder</h3>
@@ -363,6 +324,57 @@
     </div>
   </div>
 
+  <div id="modal-upload" class="modal hidden" aria-labelledby="modal-upload-title">
+    <div class="modal-backdrop" data-close="modal-upload"></div>
+    <div class="modal-card modal-panel modal-upload-card">
+      <div class="modal-upload-head">
+        <h3 id="modal-upload-title">Tambah file ke folder</h3>
+        <button type="button" class="modal-close-inline" data-close="modal-upload" aria-label="Tutup">×</button>
+      </div>
+      <p class="hint upload-target">Tujuan: <span id="upload-target-name">Saved Messages</span></p>
+
+      <div class="ingest-tabs" role="tablist">
+        <button type="button" class="ingest-tab active" data-ingest="file" id="ingest-tab-file">Upload file</button>
+        <button type="button" class="ingest-tab" data-ingest="url" id="ingest-tab-url">Import link</button>
+      </div>
+
+      <div id="ingest-panel-file" class="ingest-panel">
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="file-input" multiple>
+          <div class="dropzone-inner" id="dropzone-inner">
+            <span class="dropzone-icon">↑</span>
+            <p>Seret file ke sini atau klik untuk memilih</p>
+            <p class="hint" id="upload-label">Belum ada file dipilih (bisa banyak sekaligus)</p>
+            <p class="hint upload-limit-hint" id="upload-limit-hint">Maksimal per file: memuat…</p>
+          </div>
+          <div id="upload-preview" class="upload-preview hidden"></div>
+        </div>
+        <p id="upload-size-warn" class="error upload-size-warn hidden"></p>
+        <div class="upload-actions">
+          <button type="button" class="btn" id="btn-upload">Upload</button>
+        </div>
+        <div id="upload-status" class="status-msg hidden"></div>
+      </div>
+
+      <div id="ingest-panel-url" class="ingest-panel hidden">
+        <p class="hint">Direct link atau Google Drive (file publik / bisa diunduh).</p>
+        <p class="hint" id="import-limit-hint">Maksimal unduhan server: memuat…</p>
+        <label>URL unduhan</label>
+        <input type="url" id="import-url" placeholder="https://… link Drive atau direct download">
+        <label>Nama file <span class="hint">(otomatis dari link, bisa diubah)</span></label>
+        <input type="text" id="import-filename" placeholder="Tempel URL — nama file terisi otomatis" maxlength="200" autocomplete="off">
+        <p class="hint hidden" id="import-filename-hint"></p>
+        <button type="button" class="btn" id="btn-import-url">Unduh &amp; simpan ke Telegram</button>
+        <div id="import-url-status" class="status-msg hidden"></div>
+        <div id="import-url-error" class="error hidden"></div>
+      </div>
+
+      <div class="modal-actions modal-upload-footer">
+        <button type="button" class="btn ghost" data-close="modal-upload">Tutup</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-folder" class="modal hidden">
     <div class="modal-backdrop" data-close="modal-folder"></div>
     <div class="modal-card modal-panel">
@@ -485,6 +497,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=50"></script>
+  <script src="/static/app.js?v=51"></script>
 </body>
 </html>

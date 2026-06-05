@@ -685,6 +685,9 @@ function closeModal(id) {
   if (id === "modal-preview") {
     clearFilePreviewModal();
   }
+  if (id === "modal-upload") {
+    resetUploadModalState();
+  }
 
   if (!el.classList.contains("is-open")) {
     finishCloseModal(el);
@@ -1669,7 +1672,34 @@ function enterApp(st) {
 
 function setFolderHeader(name) {
   $("#folder-title").textContent = name;
-  $("#upload-target-name").textContent = name;
+  const target = $("#upload-target-name");
+  if (target) target.textContent = name;
+}
+
+function resetUploadModalState() {
+  clearUploadPreview();
+  if (fileInput) fileInput.value = "";
+  const uploadSt = $("#upload-status");
+  if (uploadSt) hide(uploadSt);
+  hideError($("#upload-size-warn"));
+  hideError($("#import-url-error"));
+  const importSt = $("#import-url-status");
+  if (importSt) hide(importSt);
+  const urlIn = $("#import-url");
+  const nameIn = $("#import-filename");
+  if (urlIn) urlIn.value = "";
+  if (nameIn) nameIn.value = "";
+  resetImportFilenameAutofill();
+  showIngestTab("file");
+}
+
+function openUploadModal(mode = "file") {
+  const target = $("#upload-target-name");
+  if (target) target.textContent = currentFolderName;
+  resetUploadModalState();
+  showIngestTab(mode === "url" ? "url" : "file");
+  applyUploadLimitHints();
+  openModal("modal-upload");
 }
 
 function resetFileListUI() {
@@ -2065,8 +2095,8 @@ function renderFileList(files, folderId, meta = {}) {
     } else {
       empty.textContent =
         folderId === 0
-          ? "Belum ada file media di Saved Messages. Upload file di atas."
-          : "Belum ada file di folder ini. Upload file di atas.";
+          ? "Belum ada file media di Saved Messages. Gunakan tombol Tambah file."
+          : "Belum ada file di folder ini. Gunakan tombol Tambah file.";
     }
     if (filesListMeta.scan_limit_reached && filesListMeta.total > 0) {
       empty.textContent += " (daftar dibatasi pemindaian server)";
@@ -2385,26 +2415,30 @@ function onFilesSelected(fileList) {
   renderLocalUploadPreview(files);
 }
 
-["dragenter", "dragover"].forEach((ev) => {
-  dropzone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dropzone.classList.add("dragover");
-  });
-});
-["dragleave", "drop"].forEach((ev) => {
-  dropzone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dropzone.classList.remove("dragover");
-  });
-});
-fileInput.onchange = () => onFilesSelected(fileInput.files);
+if (fileInput) {
+  fileInput.onchange = () => onFilesSelected(fileInput.files);
+}
 
-dropzone.addEventListener("drop", (e) => {
-  if (e.dataTransfer.files.length) {
-    fileInput.files = e.dataTransfer.files;
-    onFilesSelected(e.dataTransfer.files);
-  }
-});
+if (dropzone) {
+  ["dragenter", "dragover"].forEach((ev) => {
+    dropzone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach((ev) => {
+    dropzone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+    });
+  });
+  dropzone.addEventListener("drop", (e) => {
+    if (e.dataTransfer?.files?.length && fileInput) {
+      fileInput.files = e.dataTransfer.files;
+      onFilesSelected(e.dataTransfer.files);
+    }
+  });
+}
 
 async function doBulkUpload(files) {
   if (!validatePendingUploadFiles(files)) return;
@@ -2454,6 +2488,7 @@ async function doBulkUpload(files) {
     $("#upload-label").textContent = "Belum ada file dipilih (bisa banyak sekaligus)";
     validatePendingUploadFiles([]);
     await loadFiles();
+    closeModal("modal-upload");
   } catch (e) {
     if (!isFloodWaitError(e)) notifyError(e.message);
   } finally {
@@ -2620,6 +2655,7 @@ $("#btn-import-url")?.addEventListener("click", async () => {
     $("#import-filename").value = "";
     resetImportFilenameAutofill();
     await loadFiles();
+    closeModal("modal-upload");
   } catch (e) {
     if (!isFloodWaitError(e)) {
       hideError(errBox);
@@ -2630,6 +2666,9 @@ $("#btn-import-url")?.addEventListener("click", async () => {
     hideTransferLoader();
   }
 });
+
+$("#btn-open-upload")?.addEventListener("click", () => openUploadModal("file"));
+$("#btn-open-import-url")?.addEventListener("click", () => openUploadModal("url"));
 
 $("#select-all-files")?.addEventListener("change", (e) => {
   const checked = e.target.checked;
