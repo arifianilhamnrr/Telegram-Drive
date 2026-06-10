@@ -5,7 +5,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from telethon import TelegramClient
 from telethon.errors import (
@@ -20,7 +20,15 @@ from telethon.tl.functions.messages import SetHistoryTTLRequest
 from telethon.tl.types import DocumentAttributeFilename
 from telethon.utils import get_peer_id
 
-from .config import MAX_BULK_FILES, MAX_BULK_ZIP_BYTES, MAX_UPLOAD_BYTES, SESSIONS_DIR
+from .bulk_zip_jobs import BulkZipCancelled
+from .config import (
+    BULK_ZIP_DOWNLOAD_CONCURRENCY,
+    MAX_BULK_FILES,
+    MAX_BULK_ZIP_BYTES,
+    MAX_UPLOAD_BYTES,
+    SESSIONS_DIR,
+)
+from .telegram_api_settings import get_server_telegram_api
 from .errors import value_error_from_telegram
 
 TD_FOLDER_ABOUT = "Telegram Drive Storage Folder\n[telegram-drive-folder]"
@@ -156,6 +164,26 @@ class TelegramManager:
         meta = SESSIONS_DIR / f"{sid}.meta"
         meta.write_text(f"{api_id}\n{api_hash}", encoding="utf-8")
 
+    async def ensure_api_configured(self, sid: str) -> SessionState:
+        existing = self._sessions.get(sid)
+        if existing and existing.client:
+            if not existing.client.is_connected():
+                await asyncio.wait_for(existing.client.connect(), timeout=30.0)
+            return existing
+
+        meta_path = SESSIONS_DIR / f"{sid}.meta"
+        if meta_path.exists():
+            return await self._restore_state_unlocked(sid)
+
+        creds = get_server_telegram_api()
+        if not creds:
+            raise ValueError("configure_api_first")
+        await self.configure(sid, creds[0], creds[1])
+        state = self._sessions.get(sid)
+        if not state:
+            raise ValueError("configure_api_first")
+        return state
+
     async def configure(self, sid: str, api_id: int, api_hash: str) -> None:
         async with self._lock(sid):
             old = self._sessions.pop(sid, None)
@@ -190,7 +218,7 @@ class TelegramManager:
     async def request_code(self, sid: str, phone: str) -> None:
         phone = self._normalize_phone(phone)
         async with self._lock(sid):
-            state = await self._restore_state_unlocked(sid)
+            state = await self.ensure_api_configured(sid)
             client = state.client
             try:
                 sent = await asyncio.wait_for(client.send_code_request(phone), timeout=90.0)
@@ -277,10 +305,16 @@ class TelegramManager:
             me = await self._require_me(state.client)
             return {"authenticated": True, "user": _user_dict(me)}
         except ValueError:
+            try:
+                await self.ensure_api_configured(sid)
+            except ValueError:
+                return {"authenticated": False, "step": "setup"}
             state = self._sessions.get(sid)
             if state and state.pending:
                 if state.pending.phone:
                     return {"authenticated": False, "step": "code"}
+                return {"authenticated": False, "step": "phone"}
+            if get_server_telegram_api():
                 return {"authenticated": False, "step": "phone"}
             return {"authenticated": False, "step": "setup"}
 
@@ -373,13 +407,12 @@ class TelegramManager:
         per_page: int = 24,
     ) -> dict:
         from .file_filters import (
-            DEFAULT_PER_PAGE,
             LIST_SCAN_LIMIT,
-            MAX_PER_PAGE,
             file_category,
             matches_filter,
             matches_search,
             normalize_filter_type,
+            normalize_per_page,
         )
 
         state = await self.ensure_connected(sid)
@@ -391,7 +424,7 @@ class TelegramManager:
 
         ft = normalize_filter_type(filter_type)
         query = (q or "").strip()
-        per_page = max(1, min(int(per_page or DEFAULT_PER_PAGE), MAX_PER_PAGE))
+        per_page = normalize_per_page(per_page)
         page = max(1, int(page or 1))
         skip = (page - 1) * per_page
 
@@ -445,32 +478,32 @@ class TelegramManager:
             "scan_limit_reached": scanned >= LIST_SCAN_LIMIT,
         }
 
-    async def upload_file(self, sid: str, folder_id: int, filename: str, data: bytes) -> dict:
+    async def _send_file_path(
+        self,
+        sid: str,
+        folder_id: int,
+        filename: str,
+        file_path: str | Path,
+        *,
+        unlink_after: bool = False,
+    ) -> dict:
         state = await self.ensure_connected(sid)
         client = state.client
         entity = await self._resolve_entity(client, folder_id)
         safe_name = _sanitize_filename(filename)
-        TMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        suffix = Path(safe_name).suffix
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            delete=False,
-            suffix=suffix or ".bin",
-            dir=TMP_UPLOAD_DIR,
-        ) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
+        path = Path(file_path)
         try:
             attrs = [DocumentAttributeFilename(file_name=safe_name)]
             msg = await client.send_file(
                 entity,
-                tmp_path,
+                str(path),
                 caption=None,
                 force_document=True,
                 attributes=attrs,
             )
         finally:
-            Path(tmp_path).unlink(missing_ok=True)
+            if unlink_after and path.exists():
+                path.unlink(missing_ok=True)
         name, size, mime, kind, ext = _media_info(msg, fallback_name=safe_name)
         if not _is_valid_filename(name):
             name = safe_name
@@ -484,6 +517,28 @@ class TelegramManager:
             "ext": ext,
             "previewable": kind in ("image", "video") or mime.startswith(("image/", "video/")),
         }
+
+    async def upload_file(self, sid: str, folder_id: int, filename: str, data: bytes) -> dict:
+        TMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        suffix = Path(_sanitize_filename(filename)).suffix
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            suffix=suffix or ".bin",
+            dir=TMP_UPLOAD_DIR,
+        ) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        return await self._send_file_path(
+            sid, folder_id, filename, tmp_path, unlink_after=True
+        )
+
+    async def upload_file_path(
+        self, sid: str, folder_id: int, filename: str, file_path: str | Path
+    ) -> dict:
+        return await self._send_file_path(
+            sid, folder_id, filename, file_path, unlink_after=True
+        )
 
     async def _resolve_entity(self, client, folder_id: int):
         return "me" if folder_id == 0 else await client.get_entity(folder_id)
@@ -539,6 +594,193 @@ class TelegramManager:
             raise ValueError("Tidak ada file yang bisa diunduh")
         return zip_path
 
+    async def build_bulk_zip_staged(
+        self,
+        sid: str,
+        folder_id: int,
+        message_ids: list[int],
+        work_dir: Path,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> tuple[Path, str]:
+        if not message_ids:
+            raise ValueError("Pilih minimal satu file")
+        if len(message_ids) > MAX_BULK_FILES:
+            raise ValueError(f"Maksimal {MAX_BULK_FILES} file per download ZIP")
+
+        work_dir = Path(work_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        files_dir = work_dir / "files"
+        files_dir.mkdir(exist_ok=True)
+
+        state = await self.ensure_connected(sid)
+        client = state.client
+        entity = await self._resolve_entity(client, folder_id)
+
+        if cancel_check and cancel_check():
+            raise BulkZipCancelled()
+
+        fetched = await client.get_messages(entity, ids=message_ids)
+        if not isinstance(fetched, list):
+            fetched = [fetched]
+        msg_by_id = {m.id: m for m in fetched if m and getattr(m, "media", None)}
+
+        planned: list[tuple[Any, str, int]] = []
+        used_names: set[str] = set()
+        total_bytes = 0
+        file_total = len(message_ids)
+
+        for mid in message_ids:
+            msg = msg_by_id.get(mid)
+            if not msg:
+                continue
+
+            name, _, _, _, _ = _media_info(msg)
+            entry = name
+            if entry in used_names:
+                stem = Path(name).stem
+                ext = Path(name).suffix
+                entry = f"{stem}_{mid}{ext}"
+            used_names.add(entry)
+
+            file_size = int(getattr(msg.file, "size", None) or 0)
+            total_bytes += file_size
+            if total_bytes > MAX_BULK_ZIP_BYTES:
+                raise ValueError(
+                    f"Total ukuran melebihi {MAX_BULK_ZIP_BYTES // (1024 * 1024)} MB"
+                )
+            planned.append((msg, entry, file_size))
+
+        if not planned:
+            raise ValueError("Tidak ada file yang bisa diunduh")
+
+        if on_progress:
+            await on_progress(
+                {
+                    "phase": "downloading",
+                    "message": (
+                        f"Mengunduh {len(planned)} file paralel "
+                        f"(maks {BULK_ZIP_DOWNLOAD_CONCURRENCY} bersamaan)…"
+                    ),
+                    "loaded": 0,
+                    "total": total_bytes or None,
+                    "files_done": 0,
+                    "file_total": len(planned),
+                }
+            )
+
+        entries: list[tuple[str, Path, int]] = []
+        loaded_bytes = 0
+        files_done = 0
+        progress_lock = asyncio.Lock()
+        download_sem = asyncio.Semaphore(BULK_ZIP_DOWNLOAD_CONCURRENCY)
+
+        async def _download_one(msg, entry: str, expected_size: int):
+            nonlocal loaded_bytes, files_done
+            if cancel_check and cancel_check():
+                raise BulkZipCancelled()
+
+            dest = files_dir / entry
+            async with download_sem:
+                if cancel_check and cancel_check():
+                    raise BulkZipCancelled()
+                await client.download_media(msg, file=str(dest))
+
+            if not dest.exists() or dest.stat().st_size == 0:
+                dest.unlink(missing_ok=True)
+                return None
+
+            actual_size = dest.stat().st_size
+            async with progress_lock:
+                loaded_bytes += actual_size
+                files_done += 1
+                done = files_done
+                loaded = loaded_bytes
+
+            if on_progress:
+                await on_progress(
+                    {
+                        "phase": "downloading",
+                        "message": f"Paralel: {done}/{len(planned)} selesai — {entry}",
+                        "loaded": loaded,
+                        "total": total_bytes or loaded,
+                        "files_done": done,
+                        "file_total": len(planned),
+                        "current_file": entry,
+                    }
+                )
+            return entry, dest, actual_size
+
+        results = await asyncio.gather(
+            *[_download_one(msg, entry, size) for msg, entry, size in planned],
+            return_exceptions=True,
+        )
+
+        for result in results:
+            if isinstance(result, BulkZipCancelled):
+                raise result
+            if isinstance(result, Exception):
+                raise result
+            if result:
+                entries.append(result)
+
+        if not entries:
+            raise ValueError("Tidak ada file yang bisa diunduh")
+
+        zip_name = f"archive-{len(entries)}files.zip"
+        zip_path = work_dir / zip_name
+
+        if on_progress:
+            await on_progress(
+                {
+                    "phase": "compressing",
+                    "message": f"Mengompres {len(entries)} file…",
+                    "loaded": loaded_bytes,
+                    "total": loaded_bytes,
+                    "files_done": len(entries),
+                    "file_total": file_total,
+                }
+            )
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for entry, path, _size in entries:
+                if cancel_check and cancel_check():
+                    raise BulkZipCancelled()
+                zf.write(path, arcname=entry)
+
+        for _entry, path, _size in entries:
+            path.unlink(missing_ok=True)
+        try:
+            files_dir.rmdir()
+        except OSError:
+            pass
+
+        if not zip_path.exists() or zip_path.stat().st_size == 0:
+            zip_path.unlink(missing_ok=True)
+            raise ValueError("Gagal membuat arsip ZIP")
+
+        return zip_path, zip_name
+
+    async def compress_and_save_zip(
+        self,
+        sid: str,
+        folder_id: int,
+        message_ids: list[int],
+        zip_name: str | None = None,
+    ) -> dict:
+        zip_path = await self.build_bulk_zip(sid, folder_id, message_ids)
+        zip_size = zip_path.stat().st_size
+        if zip_size > MAX_UPLOAD_BYTES:
+            zip_path.unlink(missing_ok=True)
+            raise ValueError(
+                f"ZIP melebihi batas upload ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"
+            )
+        name = (zip_name or "").strip() or f"archive-{len(message_ids)}files.zip"
+        if not name.lower().endswith(".zip"):
+            name += ".zip"
+        return await self.upload_file_path(sid, folder_id, name, zip_path)
+
     async def upload_files_bulk(
         self, sid: str, folder_id: int, items: list[tuple[str, bytes]]
     ) -> dict:
@@ -572,6 +814,26 @@ class TelegramManager:
         name, _, mime, _, _ = _media_info(msg)
         size = int(getattr(msg.file, "size", None) or 0)
         return name, mime, size
+
+    async def get_thumbnail_bytes(self, sid: str, folder_id: int, message_id: int) -> tuple[bytes, str]:
+        from .thumb_cache import read_cached_thumb, write_cached_thumb
+
+        cached = read_cached_thumb(sid, folder_id, message_id)
+        if cached:
+            return cached, "image/jpeg"
+
+        client, msg = await self._get_media_message(sid, folder_id, message_id)
+        if not _has_telegram_thumb(msg):
+            raise ValueError("thumb_not_available")
+        data = await client.download_media(msg, file=bytes, thumb=-1)
+        if not data:
+            raise ValueError("thumb_not_available")
+        if len(data) > 2 * 1024 * 1024:
+            raise ValueError("thumb_not_available")
+
+        data, mime = _optimize_thumbnail_bytes(data)
+        write_cached_thumb(sid, folder_id, message_id, data)
+        return data, mime
 
     async def iter_download_bytes(
         self,
@@ -673,6 +935,33 @@ def _ext_from_mime(mime: str) -> str:
         if 1 < len(sub) <= 8 and sub.isalnum():
             return sub
     return ""
+
+
+def _has_telegram_thumb(msg) -> bool:
+    if getattr(msg, "photo", None):
+        return True
+    doc = getattr(msg, "document", None)
+    if doc and getattr(doc, "thumbs", None):
+        return bool(doc.thumbs)
+    return False
+
+
+def _optimize_thumbnail_bytes(data: bytes) -> tuple[bytes, str]:
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        from .thumb_cache import THUMB_JPEG_QUALITY, THUMB_MAX_EDGE
+
+        with Image.open(BytesIO(data)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            im.save(out, format="JPEG", quality=THUMB_JPEG_QUALITY, optimize=True)
+            return out.getvalue(), "image/jpeg"
+    except Exception:
+        return data, "image/jpeg"
 
 
 def _guess_kind(mime: str, ext: str) -> str:

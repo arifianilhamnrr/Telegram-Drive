@@ -1,11 +1,14 @@
 import asyncio
 import json
 import secrets
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
+from html import escape as html_escape
 from pathlib import Path
 from typing import List, Literal, Optional
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .file_filters import file_category
 
@@ -18,6 +21,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -32,11 +36,17 @@ from .config import (
     GATE_COOKIE,
     MAX_UPLOAD_BYTES,
     SESSION_MAX_AGE,
+    SESSIONS_DIR,
     SHARE_ACCESS_COOKIE,
     STATIC_DIR,
     USER_COOKIE,
     USERS_DB,
     WEB_ACCESS_PASSWORD,
+)
+from .telegram_api_settings import (
+    admin_telegram_api_view,
+    is_server_telegram_api_configured,
+    save_telegram_api_settings,
 )
 from .deps import (
     account_cookie_value,
@@ -45,9 +55,12 @@ from .deps import (
     get_user_store,
     is_admin_user,
     optional_user,
+    parse_account_cookie,
     require_admin,
     require_user,
 )
+from .download_token import issue_job_download_token, resolve_job_download_token
+from .media_token import issue_media_play_token, media_play_path, resolve_media_play_token
 from .errors import http_exception_from_value
 from .media_stream import build_media_response, build_preview_response, preview_inline_allowed
 from .telegram_mgr import _fmt_size, mgr
@@ -61,15 +74,87 @@ from .ytdlp_fetcher import (
 )
 from .donation_qr import build_donation_qr_png
 from .lk21_client import Lk21ApiError, list_movies, movie_detail, resolve_stream, search_movies
+from .bulk_zip_jobs import (
+    BULK_ZIP_DIR,
+    BULK_ZIP_TTL_SEC,
+    BulkZipCancelled,
+    cleanup_bulk_zip_job,
+)
 from .movie_telegram_save import (
+    LOCAL_DOWNLOAD_TTL_SEC,
+    MovieDownloadCancelled,
+    cleanup_local_download,
     download_direct_to_temp,
     download_hls_to_temp,
+    list_stream_qualities,
     resolve_m3u8_for_save,
     sanitize_movie_filename,
+    stash_movie_download,
 )
 
 MOVIE_SAVE_SEM = asyncio.Semaphore(1)
 MOVIE_SAVE_TASKS: dict[str, dict] = {}
+BULK_ZIP_SEM = asyncio.Semaphore(1)
+BULK_ZIP_TASKS: dict[str, dict] = {}
+
+
+def _movie_job_record(job_id: str) -> Optional[dict]:
+    return MOVIE_SAVE_TASKS.get(job_id)
+
+
+def _movie_job_cancelled(job_id: str) -> bool:
+    job = _movie_job_record(job_id)
+    return bool(job and job.get("cancel_requested"))
+
+
+async def _acquire_movie_slot(job_id: str) -> None:
+    """Wait for queue slot; abort if user cancelled while queued."""
+    while True:
+        if _movie_job_cancelled(job_id):
+            raise MovieDownloadCancelled()
+        try:
+            await asyncio.wait_for(MOVIE_SAVE_SEM.acquire(), timeout=0.4)
+            return
+        except asyncio.TimeoutError:
+            continue
+
+
+def _kill_movie_download_proc(job: dict) -> None:
+    holder = job.get("proc_holder") or {}
+    proc = holder.get("proc")
+    if proc is not None and proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
+def _bulk_zip_job_record(job_id: str) -> Optional[dict]:
+    return BULK_ZIP_TASKS.get(job_id)
+
+
+def _bulk_zip_job_cancelled(job_id: str) -> bool:
+    job = _bulk_zip_job_record(job_id)
+    return bool(job and job.get("cancel_requested"))
+
+
+async def _acquire_bulk_zip_slot(job_id: str) -> None:
+    while True:
+        if _bulk_zip_job_cancelled(job_id):
+            raise BulkZipCancelled()
+        try:
+            await asyncio.wait_for(BULK_ZIP_SEM.acquire(), timeout=0.4)
+            return
+        except asyncio.TimeoutError:
+            continue
+
+
+from .anime_sources_settings import (
+    discover_samehadaku_base,
+    get_samehadaku_domain_status,
+    set_samehadaku_backup_domains,
+    set_samehadaku_base_manual,
+)
 from .lk21_domain import discover_base_url, get_lk21_domain_status, set_lk21_base_manual
 from .lk21_hls_proxy import proxy_hls_request
 from .donation_settings import (
@@ -77,6 +162,44 @@ from .donation_settings import (
     get_public_donation_info,
     reset_donation_settings,
     save_donation_settings,
+)
+from .code_catalog_settings import (
+    admin_code_catalog_view,
+    get_public_code_catalog_status,
+    save_code_catalog_settings,
+)
+from .code_catalog_scraper import (
+    CodeCatalogScrapeError,
+    code_catalog_movie_detail,
+    code_catalog_resolve_stream,
+    fetch_code_catalog_poster,
+    looks_like_jav_code_query,
+    search_code_catalog_by_code,
+)
+from .nontonanimeid_scraper import (
+    NontonAnimeIDScrapeError,
+    fetch_episode_servers as nontonanimeid_fetch_episode_servers,
+    movie_detail as nontonanimeid_movie_detail,
+    list_movies as nontonanimeid_list_movies,
+    resolve_stream as nontonanimeid_resolve_stream,
+    search_movies as nontonanimeid_search_movies,
+)
+from .otakudesu_scraper import (
+    OtakudesuScrapeError,
+    fetch_episode_downloads as otakudesu_fetch_episode_downloads,
+    fetch_episode_servers as otakudesu_fetch_episode_servers,
+    get_otakudesu_base,
+    movie_detail as otakudesu_movie_detail,
+    list_movies as otakudesu_list_movies,
+    resolve_stream as otakudesu_resolve_stream,
+    search_movies as otakudesu_search_movies,
+)
+from .tambuk_scraper import (
+    TambukScrapeError,
+    movie_detail as tambuk_movie_detail,
+    list_movies as tambuk_list_movies,
+    resolve_stream as tambuk_resolve_stream,
+    search_movies as tambuk_search_movies,
 )
 from .share_access import (
     assert_share_active,
@@ -118,6 +241,43 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Telegram Drive Web", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+
+def _check_gate_cookie(td_gate: Optional[str]) -> None:
+    if not WEB_ACCESS_PASSWORD:
+        return
+    if not td_gate:
+        raise HTTPException(401, "gate_required")
+    try:
+        if not secrets.compare_digest(gate_signer.loads(td_gate), WEB_ACCESS_PASSWORD):
+            raise HTTPException(401, "gate_invalid")
+    except BadSignature:
+        raise HTTPException(401, "gate_invalid") from None
+
+
+def _user_for_job_file_download(
+    job_id: str,
+    kind: str,
+    *,
+    token: Optional[str],
+    td_account: Optional[str],
+    td_gate: Optional[str],
+    store: UserStore,
+) -> User:
+    if (token or "").strip():
+        uid = resolve_job_download_token(token.strip(), job_id=job_id, kind=kind)
+        user = store.get_by_id(uid)
+        if not user:
+            raise HTTPException(401, "account_required")
+        return user
+    _check_gate_cookie(td_gate)
+    uid = parse_account_cookie(td_account)
+    if not uid:
+        raise HTTPException(401, "account_required")
+    user = store.get_by_id(uid)
+    if not user:
+        raise HTTPException(401, "account_required")
+    return user
 
 
 def set_account_cookie(response: JSONResponse, user: User) -> None:
@@ -182,6 +342,12 @@ class BulkFilesBody(BaseModel):
     message_ids: List[int] = Field(min_length=1, max_length=50)
 
 
+class BulkCompressBody(BaseModel):
+    folder_id: int = 0
+    message_ids: List[int] = Field(min_length=1, max_length=50)
+    zip_name: Optional[str] = Field(default=None, max_length=200)
+
+
 class ImportUrlBody(BaseModel):
     url: str = Field(min_length=8, max_length=8000)
     folder_id: int = 0
@@ -198,8 +364,25 @@ class AdminDonationBody(BaseModel):
     enabled: bool = True
 
 
+class AdminTelegramApiBody(BaseModel):
+    api_id: int = Field(gt=0)
+    api_hash: str = Field(min_length=10, max_length=128)
+
+
 class AdminLk21Body(BaseModel):
     base_url: str = Field(default="", max_length=500)
+
+
+class AdminSamehadakuBody(BaseModel):
+    base_url: str = Field(default="", max_length=500)
+
+
+class AdminSamehadakuBackupsBody(BaseModel):
+    backup_domains: List[str] = Field(default_factory=list, max_length=30)
+
+
+class AdminCodeCatalogBody(BaseModel):
+    enabled: bool = False
 
 
 class MovieSaveTelegramBody(BaseModel):
@@ -209,6 +392,9 @@ class MovieSaveTelegramBody(BaseModel):
     title: str = Field(default="film", max_length=120)
     iframe_url: str = Field(default="", max_length=8000)
     movie_url: str = Field(default="", max_length=8000)
+    mode: Literal["telegram", "download", "both"] = "telegram"
+    quality: str = Field(default="", max_length=32)
+    download_url: str = Field(default="", max_length=8000)
 
 
 class ShareCreateBody(BaseModel):
@@ -277,6 +463,9 @@ async def public_config(store: UserStore = Depends(get_user_store)):
         "donation": get_public_donation_info(),
         "movies_available": True,
         "lk21": get_lk21_domain_status(),
+        "samehadaku": get_samehadaku_domain_status(),
+        "code_catalog": get_public_code_catalog_status(),
+        "telegram_api_configured": is_server_telegram_api_configured(),
     }
 
 
@@ -366,6 +555,22 @@ async def account_me(user: Optional[User] = Depends(optional_user), _: None = De
     }
 
 
+@app.get("/api/admin/telegram-api")
+async def admin_telegram_api_get(_: User = Depends(require_admin)):
+    return admin_telegram_api_view()
+
+
+@app.post("/api/admin/telegram-api")
+async def admin_telegram_api_save(
+    body: AdminTelegramApiBody,
+    _: User = Depends(require_admin),
+):
+    try:
+        return save_telegram_api_settings(body.api_id, body.api_hash.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/admin/donation")
 async def admin_donation_get(_: User = Depends(require_admin)):
     return admin_donation_view()
@@ -450,6 +655,19 @@ async def admin_lk21_refresh_domain(_: User = Depends(require_admin)):
     }
 
 
+@app.get("/api/admin/code-catalog")
+async def admin_code_catalog_get(_: User = Depends(require_admin)):
+    return admin_code_catalog_view()
+
+
+@app.post("/api/admin/code-catalog")
+async def admin_code_catalog_save(body: AdminCodeCatalogBody, _: User = Depends(require_admin)):
+    try:
+        return save_code_catalog_settings(enabled=body.enabled)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/admin/lk21")
 async def admin_lk21_set_base(body: AdminLk21Body, _: User = Depends(require_admin)):
     url = (body.base_url or "").strip()
@@ -464,6 +682,62 @@ async def admin_lk21_set_base(body: AdminLk21Body, _: User = Depends(require_adm
         "message": "Domain LK21 disimpan",
         "base_url": base,
         **get_lk21_domain_status(),
+    }
+
+
+@app.get("/api/admin/samehadaku")
+async def admin_samehadaku_get(_: User = Depends(require_admin)):
+    status = get_samehadaku_domain_status()
+    base = status.get("base_url")
+    if not base:
+        base = await discover_samehadaku_base()
+        status = get_samehadaku_domain_status()
+    return {"ok": True, **status, "base_url": base}
+
+
+@app.post("/api/admin/samehadaku/refresh-domain")
+async def admin_samehadaku_refresh_domain(_: User = Depends(require_admin)):
+    base = await discover_samehadaku_base(force=True)
+    return {
+        "ok": True,
+        "message": "Domain Samehadaku diperbarui",
+        "base_url": base,
+        **get_samehadaku_domain_status(),
+    }
+
+
+@app.post("/api/admin/samehadaku")
+async def admin_samehadaku_set_base(
+    body: AdminSamehadakuBody, _: User = Depends(require_admin)
+):
+    url = (body.base_url or "").strip()
+    if not url:
+        raise HTTPException(400, "base_url wajib")
+    try:
+        base = set_samehadaku_base_manual(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "ok": True,
+        "message": "Domain utama Samehadaku disimpan",
+        "base_url": base,
+        **get_samehadaku_domain_status(),
+    }
+
+
+@app.post("/api/admin/samehadaku/backups")
+async def admin_samehadaku_set_backups(
+    body: AdminSamehadakuBackupsBody, _: User = Depends(require_admin)
+):
+    try:
+        backups = set_samehadaku_backup_domains(body.backup_domains or [])
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "ok": True,
+        "message": "Domain backup Samehadaku disimpan",
+        "backup_domains": backups,
+        **get_samehadaku_domain_status(),
     }
 
 
@@ -511,6 +785,11 @@ async def auth_status(user: User = Depends(require_user)):
 
 @app.post("/api/auth/configure")
 async def auth_configure(body: ApiConfig, user: User = Depends(require_user)):
+    if is_server_telegram_api_configured():
+        raise HTTPException(
+            403,
+            "API Telegram sudah dikonfigurasi admin — lanjutkan dengan nomor telepon dan OTP.",
+        )
     sid = user.telegram_sid
     try:
         await mgr.configure(sid, body.api_id, body.api_hash.strip())
@@ -777,14 +1056,244 @@ async def bulk_delete(body: BulkFilesBody, user: User = Depends(require_user)):
     return {"ok": True, "deleted": count}
 
 
-@app.post("/api/files/bulk-download")
-async def bulk_download(
-    body: BulkFilesBody,
-    background_tasks: BackgroundTasks,
-    user: User = Depends(require_user),
-):
+async def _run_bulk_zip_job(job_id: str, body: BulkFilesBody, user: User) -> None:
+    job = BULK_ZIP_TASKS.get(job_id)
+    if not job:
+        return
+    work_dir = BULK_ZIP_DIR / job_id
+    job["work_dir"] = str(work_dir)
+
+    async def _on_progress(data: dict) -> None:
+        job.update(
+            {
+                "phase": data.get("phase", job.get("phase", "")),
+                "message": data.get("message", ""),
+                "loaded": data.get("loaded", job.get("loaded", 0)),
+                "total": data.get("total"),
+                "files_done": data.get("files_done", job.get("files_done", 0)),
+                "file_total": data.get("file_total", job.get("file_total", 0)),
+            }
+        )
+
     try:
-        zip_path = await mgr.build_bulk_zip(user.telegram_sid, body.folder_id, body.message_ids)
+        job.update(
+            {
+                "status": "running",
+                "phase": "queued",
+                "message": "Menunggu slot server…",
+            }
+        )
+        await _acquire_bulk_zip_slot(job_id)
+        try:
+            job.update(
+                {
+                    "phase": "downloading",
+                    "message": "Mengunduh file dari Telegram ke server…",
+                }
+            )
+            zip_path, zip_name = await mgr.build_bulk_zip_staged(
+                user.telegram_sid,
+                body.folder_id,
+                body.message_ids,
+                work_dir,
+                cancel_check=lambda: _bulk_zip_job_cancelled(job_id),
+                on_progress=_on_progress,
+            )
+            job.update(
+                {
+                    "status": "done",
+                    "phase": "done",
+                    "message": "ZIP siap diunduh dari server",
+                    "loaded": zip_path.stat().st_size,
+                    "total": zip_path.stat().st_size,
+                    "local_path": str(zip_path),
+                    "local_filename": zip_name,
+                    "local_download": True,
+                    "local_ready_at": time.time(),
+                }
+            )
+        finally:
+            BULK_ZIP_SEM.release()
+    except BulkZipCancelled:
+        cleanup_bulk_zip_job(job)
+        job.update(
+            {
+                "status": "cancelled",
+                "phase": "cancelled",
+                "message": "Dibatalkan",
+                "error": None,
+            }
+        )
+    except ValueError as e:
+        cleanup_bulk_zip_job(job)
+        job.update(
+            {
+                "status": "error",
+                "phase": "error",
+                "message": "Gagal",
+                "error": str(e),
+            }
+        )
+    except Exception as e:
+        cleanup_bulk_zip_job(job)
+        job.update(
+            {
+                "status": "error",
+                "phase": "error",
+                "message": "Gagal",
+                "error": str(e),
+            }
+        )
+
+
+@app.post("/api/files/bulk-download")
+async def bulk_download(body: BulkFilesBody, user: User = Depends(require_user)):
+    if not body.message_ids:
+        raise HTTPException(400, "Pilih minimal satu file")
+    job_id = str(uuid.uuid4())
+    count = len(body.message_ids)
+    BULK_ZIP_TASKS[job_id] = {
+        "id": job_id,
+        "user_id": user.id,
+        "type": "bulk_zip",
+        "title": f"ZIP bulk ({count} file)",
+        "folder_id": body.folder_id,
+        "status": "queued",
+        "phase": "queued",
+        "loaded": 0,
+        "total": None,
+        "files_done": 0,
+        "file_total": count,
+        "message": "Dalam antrian…",
+        "created": time.time(),
+        "error": None,
+        "local_download": False,
+        "local_filename": None,
+        "local_path": None,
+        "local_ready_at": None,
+        "work_dir": None,
+        "cancel_requested": False,
+    }
+    task = asyncio.create_task(_run_bulk_zip_job(job_id, body, user))
+    BULK_ZIP_TASKS[job_id]["worker_task"] = task
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "message": "ZIP masuk antrian. Pantau progress di menu Downloads.",
+    }
+
+
+@app.get("/api/files/bulk-downloads")
+async def list_bulk_zip_downloads(user: User = Depends(require_user)):
+    user_jobs = []
+    now = time.time()
+    to_remove = []
+    for jid, j in list(BULK_ZIP_TASKS.items()):
+        if j.get("user_id") != user.id:
+            continue
+        local_ready_at = j.get("local_ready_at") or j.get("created", 0)
+        if j.get("local_path") and now - local_ready_at > BULK_ZIP_TTL_SEC:
+            cleanup_bulk_zip_job(j)
+        if j.get("status") in ("done", "error", "cancelled") and now - j.get("created", 0) > 86400 * 7:
+            cleanup_bulk_zip_job(j)
+            to_remove.append(jid)
+            continue
+        status = j.get("status", "unknown")
+        local_ready = bool(j.get("local_download") and j.get("local_path"))
+        user_jobs.append(
+            {
+                "id": jid,
+                "type": "bulk_zip",
+                "title": j.get("title", "ZIP bulk"),
+                "status": status,
+                "phase": j.get("phase", ""),
+                "loaded": j.get("loaded", 0),
+                "total": j.get("total"),
+                "files_done": j.get("files_done", 0),
+                "file_total": j.get("file_total", 0),
+                "message": j.get("message", ""),
+                "error": j.get("error"),
+                "created": j.get("created"),
+                "local_download": local_ready,
+                "local_filename": j.get("local_filename"),
+                "download_token": (
+                    issue_job_download_token(user_id=user.id, job_id=jid, kind="bulk_zip")
+                    if local_ready and status == "done"
+                    else None
+                ),
+                "cancellable": status in ("queued", "running"),
+            }
+        )
+    for jid in to_remove:
+        cleanup_bulk_zip_job(BULK_ZIP_TASKS.get(jid) or {})
+        BULK_ZIP_TASKS.pop(jid, None)
+    user_jobs.sort(key=lambda x: x.get("created", 0), reverse=True)
+    return {"ok": True, "jobs": user_jobs[:50]}
+
+
+@app.post("/api/files/bulk-downloads/{job_id}/cancel")
+async def cancel_bulk_zip_download(job_id: str, user: User = Depends(require_user)):
+    job = BULK_ZIP_TASKS.get(job_id)
+    if not job or job.get("user_id") != user.id:
+        raise HTTPException(404, "Job tidak ditemukan")
+    status = job.get("status", "")
+    if status in ("done", "cancelled", "error"):
+        raise HTTPException(400, "Job ini sudah selesai atau tidak bisa dibatalkan")
+    job["cancel_requested"] = True
+    cleanup_bulk_zip_job(job)
+    job.update(
+        {
+            "status": "cancelled",
+            "phase": "cancelled",
+            "message": "Dibatalkan",
+        }
+    )
+    return {"ok": True, "id": job_id, "status": "cancelled"}
+
+
+@app.get("/api/files/bulk-downloads/{job_id}/file")
+async def download_bulk_zip_job_file(
+    job_id: str,
+    token: Optional[str] = Query(None),
+    td_account: Optional[str] = Cookie(None),
+    td_gate: Optional[str] = Cookie(None),
+    store: UserStore = Depends(get_user_store),
+):
+    user = _user_for_job_file_download(
+        job_id,
+        "bulk_zip",
+        token=token,
+        td_account=td_account,
+        td_gate=td_gate,
+        store=store,
+    )
+    job = BULK_ZIP_TASKS.get(job_id)
+    if not job or job.get("user_id") != user.id:
+        raise HTTPException(404, "Job tidak ditemukan")
+    if job.get("status") != "done" or not job.get("local_path"):
+        raise HTTPException(404, "ZIP belum tersedia")
+    path = Path(str(job["local_path"]))
+    if not path.is_file():
+        cleanup_bulk_zip_job(job)
+        raise HTTPException(404, "ZIP sudah tidak ada di server")
+    filename = job.get("local_filename") or path.name
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/files/bulk-compress")
+async def bulk_compress(body: BulkCompressBody, user: User = Depends(require_user)):
+    try:
+        result = await mgr.compress_and_save_zip(
+            user.telegram_sid,
+            body.folder_id,
+            body.message_ids,
+            body.zip_name,
+        )
     except ValueError as e:
         msg = str(e)
         if msg in ("not_authenticated", "telegram_required"):
@@ -792,15 +1301,35 @@ async def bulk_download(
         raise HTTPException(400, msg) from e
     except Exception as e:
         raise HTTPException(502, str(e)) from e
+    return {"ok": True, "file": result}
 
-    def _cleanup(p: Path) -> None:
-        p.unlink(missing_ok=True)
 
-    background_tasks.add_task(_cleanup, zip_path)
-    return FileResponse(
-        zip_path,
-        media_type="application/zip",
-        filename=f"telegram-drive-{body.folder_id}-{len(body.message_ids)}files.zip",
+@app.get("/api/thumb/{folder_id}/{message_id}")
+async def file_thumbnail(
+    folder_id: int,
+    message_id: int,
+    user: User = Depends(require_user),
+):
+    try:
+        data, mime = await mgr.get_thumbnail_bytes(user.telegram_sid, folder_id, message_id)
+    except ValueError as e:
+        msg = str(e)
+        if msg == "file_not_found":
+            raise HTTPException(404, "file_not_found") from e
+        if msg == "thumb_not_available":
+            raise HTTPException(404, "thumb_not_available") from e
+        if msg in ("not_authenticated", "telegram_required"):
+            raise HTTPException(401, "telegram_required") from e
+        raise HTTPException(400, msg) from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={
+            "Cache-Control": "public, max-age=604800, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -973,10 +1502,12 @@ async def movies_lk21_status(user: User = Depends(require_user)):
 async def movies_lk21_list(
     kind: str = "new",
     page: int = 1,
+    per_page: int = 24,
     user: User = Depends(require_user),
 ):
+    del user
     try:
-        return await list_movies(kind, page)
+        return await list_movies(kind, page, per_page=per_page)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Lk21ApiError as e:
@@ -987,14 +1518,511 @@ async def movies_lk21_list(
 async def movies_lk21_search(
     q: str = "",
     page: int = 1,
+    per_page: int = 24,
     user: User = Depends(require_user),
 ):
+    del user
     try:
-        return await search_movies(q, page)
+        return await search_movies(q, page, per_page=per_page)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Lk21ApiError as e:
         raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/code-catalog/status")
+async def movies_code_catalog_status(user: User = Depends(require_user)):
+    del user
+    return {"ok": True, **get_public_code_catalog_status()}
+
+
+@app.get("/api/movies/code-catalog/search")
+async def movies_code_catalog_search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    if not looks_like_jav_code_query(q):
+        raise HTTPException(400, "Format pencarian tidak valid")
+    try:
+        return await search_code_catalog_by_code(q, page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except CodeCatalogScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/code-catalog/detail")
+async def movies_code_catalog_detail(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await code_catalog_movie_detail(url.strip())
+    except CodeCatalogScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/code-catalog/stream")
+async def movies_code_catalog_stream(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await code_catalog_resolve_stream(url.strip())
+    except CodeCatalogScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/code-catalog/hls")
+async def movies_code_catalog_hls(
+    u: str = "",
+    r: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (u or "").strip():
+        raise HTTPException(400, "u wajib")
+    return await proxy_hls_request(
+        upstream_url=u.strip(),
+        referer=(r or "").strip(),
+        proxy_path="/api/movies/code-catalog/hls",
+    )
+
+
+@app.get("/api/movies/code-catalog/poster")
+async def movies_code_catalog_poster(id: str = "", user: User = Depends(require_user)):
+    del user
+    slug = (id or "").strip()
+    if not slug:
+        raise HTTPException(400, "id wajib")
+    try:
+        content, ctype = await fetch_code_catalog_poster(slug)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat poster: {e}") from e
+    return Response(
+        content=content,
+        media_type=ctype,
+        headers={
+            "Cache-Control": "public, max-age=86400, immutable",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@app.get("/api/movies/tambuk/list")
+async def movies_tambuk_list(
+    kind: str = "drakor",
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await tambuk_list_movies(kind, page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except TambukScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/tambuk/search")
+async def movies_tambuk_search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await tambuk_search_movies(q, page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except TambukScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/tambuk/detail")
+async def movies_tambuk_detail(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await tambuk_movie_detail(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except TambukScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/tambuk/stream")
+async def movies_tambuk_stream(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await tambuk_resolve_stream(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except TambukScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/tambuk/hls")
+async def movies_tambuk_hls(
+    u: str = "",
+    r: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (u or "").strip():
+        raise HTTPException(400, "u wajib")
+    return await proxy_hls_request(
+        upstream_url=u.strip(),
+        referer=(r or "").strip(),
+        proxy_path="/api/movies/tambuk/hls",
+    )
+
+
+@app.get("/api/movies/tambuk/poster")
+async def movies_tambuk_poster(u: str = "", user: User = Depends(require_user)):
+    del user
+    url = (u or "").strip()
+    if not url:
+        raise HTTPException(400, "u wajib")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "invalid poster url")
+    referer = "https://tambuk.sbs/"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                },
+            )
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+            return Response(
+                content=resp.content,
+                media_type=ctype,
+                headers={
+                    "Cache-Control": "public, max-age=86400, immutable",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"poster fetch failed: {type(e).__name__}") from e
+
+
+@app.get("/api/movies/otakudesu/list")
+async def movies_otakudesu_list(
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await otakudesu_list_movies(page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/otakudesu/search")
+async def movies_otakudesu_search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await otakudesu_search_movies(q, page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/otakudesu/detail")
+async def movies_otakudesu_detail(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await otakudesu_movie_detail(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/otakudesu/episode-downloads")
+async def movies_otakudesu_episode_downloads(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await otakudesu_fetch_episode_downloads(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/otakudesu/episode-servers")
+async def movies_otakudesu_episode_servers(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await otakudesu_fetch_episode_servers(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/otakudesu/stream")
+async def movies_otakudesu_stream(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await otakudesu_resolve_stream(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except OtakudesuScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/otakudesu/poster")
+async def movies_otakudesu_poster(u: str = "", user: User = Depends(require_user)):
+    del user
+    url = (u or "").strip()
+    if not url:
+        raise HTTPException(400, "u wajib")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "invalid poster url")
+    referer = get_otakudesu_base() + "/"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                },
+            )
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+            return Response(
+                content=resp.content,
+                media_type=ctype,
+                headers={
+                    "Cache-Control": "public, max-age=86400, immutable",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"poster fetch failed: {type(e).__name__}") from e
+
+
+@app.get("/api/movies/nontonanimeid/list")
+@app.get("/api/movies/samehadaku/list")
+async def movies_nontonanimeid_list(
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await nontonanimeid_list_movies(page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except NontonAnimeIDScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/nontonanimeid/search")
+@app.get("/api/movies/samehadaku/search")
+async def movies_nontonanimeid_search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 24,
+    user: User = Depends(require_user),
+):
+    del user
+    try:
+        return await nontonanimeid_search_movies(q, page, per_page=per_page)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except NontonAnimeIDScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/nontonanimeid/detail")
+@app.get("/api/movies/samehadaku/detail")
+async def movies_nontonanimeid_detail(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await nontonanimeid_movie_detail(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except NontonAnimeIDScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/nontonanimeid/episode-servers")
+@app.get("/api/movies/samehadaku/episode-servers")
+async def movies_nontonanimeid_episode_servers(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return await nontonanimeid_fetch_episode_servers(url.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except NontonAnimeIDScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Gagal memuat halaman: {e}") from e
+
+
+@app.get("/api/movies/nontonanimeid/stream")
+@app.get("/api/movies/samehadaku/stream")
+async def movies_nontonanimeid_stream(
+    url: str = "",
+    user: User = Depends(require_user),
+):
+    if not (url or "").strip():
+        raise HTTPException(400, "url wajib")
+    try:
+        return _attach_mp4_play_url(
+            await nontonanimeid_resolve_stream(url.strip()), user
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except NontonAnimeIDScrapeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/nontonanimeid/hls")
+@app.get("/api/movies/samehadaku/hls")
+async def movies_nontonanimeid_hls(
+    u: str = "",
+    r: str = "",
+    user: User = Depends(require_user),
+):
+    del user
+    if not (u or "").strip():
+        raise HTTPException(400, "u wajib")
+    return await proxy_hls_request(
+        upstream_url=u.strip(),
+        referer=(r or "").strip(),
+        proxy_path="/api/movies/nontonanimeid/hls",
+    )
+
+
+@app.get("/api/movies/nontonanimeid/poster")
+@app.get("/api/movies/samehadaku/poster")
+async def movies_nontonanimeid_poster(u: str = "", user: User = Depends(require_user)):
+    del user
+    url = (u or "").strip()
+    if not url:
+        raise HTTPException(400, "u wajib")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "invalid poster url")
+    status = get_samehadaku_domain_status()
+    referer = (status.get("base_url") or "https://s13.nontonanimeid.boats") + "/"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                },
+            )
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+            return Response(
+                content=resp.content,
+                media_type=ctype,
+                headers={
+                    "Cache-Control": "public, max-age=86400, immutable",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"poster fetch failed: {type(e).__name__}") from e
 
 
 @app.get("/api/movies/lk21/detail")
@@ -1014,6 +2042,22 @@ async def movies_lk21_detail(
         raise HTTPException(502, f"Gagal memuat halaman film: {e}") from e
 
 
+def _attach_mp4_play_url(payload: dict, user: User) -> dict:
+    mp4 = (payload.get("mp4") or "").strip()
+    if not mp4:
+        return payload
+    referer = (payload.get("referer") or payload.get("iframe") or "").strip()
+    try:
+        token = issue_media_play_token(
+            user_id=user.id, upstream=mp4, referer=referer
+        )
+        payload = dict(payload)
+        payload["mp4_play_url"] = media_play_path(token)
+    except ValueError:
+        pass
+    return payload
+
+
 @app.get("/api/movies/lk21/stream")
 async def movies_lk21_stream(
     url: str = "",
@@ -1022,11 +2066,27 @@ async def movies_lk21_stream(
     if not (url or "").strip():
         raise HTTPException(400, "url wajib")
     try:
-        return await resolve_stream(url.strip())
+        result = await resolve_stream(url.strip())
+        return _attach_mp4_play_url(result, user)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Lk21ApiError as e:
         raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/movies/lk21/media-play-url")
+async def movies_lk21_media_play_url(
+    u: str = "",
+    r: str = "",
+    user: User = Depends(require_user),
+):
+    """URL proxy MP4 bertanda tangan — untuk <video src> tanpa bergantung cookie."""
+    raw = (u or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        raise HTTPException(400, "u wajib")
+    referer = (r or raw).strip()
+    token = issue_media_play_token(user_id=user.id, upstream=raw, referer=referer)
+    return {"url": media_play_path(token)}
 
 
 @app.get("/api/movies/lk21/hls")
@@ -1044,20 +2104,116 @@ async def movies_lk21_hls(
     )
 
 
+@app.get("/api/movies/lk21/media")
+async def movies_lk21_media(
+    request: Request,
+    u: str = "",
+    r: str = "",
+    t: str = "",
+    td_account: Optional[str] = Cookie(None),
+    store: UserStore = Depends(get_user_store),
+    _: None = Depends(gate_required),
+):
+    """Proxy MP4/video hasil resolve P2P (CDN butuh Referer player)."""
+    if (t or "").strip():
+        _, upstream, referer = resolve_media_play_token(t)
+    else:
+        uid = parse_account_cookie(td_account)
+        if not uid or not store.get_by_id(uid):
+            raise HTTPException(401, "account_required")
+        upstream = (u or "").strip()
+        if not upstream:
+            raise HTTPException(400, "u wajib")
+        referer = (r or "").strip()
+    return await proxy_hls_request(
+        upstream_url=upstream,
+        referer=referer,
+        proxy_path="/api/movies/lk21/media",
+        range_header=request.headers.get("range") or "",
+        allow_p2p_cdn=True,
+    )
+
+
+def _ensure_p2p_api_all(embed_url: str, start_sec: int = 0) -> str:
+    """Siapkan URL player P2P: api=all & reportCurrentTime wajib di hash (#), bukan query (?)."""
+    raw = (embed_url or "").strip()
+    if not raw:
+        return raw
+    parsed = urlparse(raw)
+    skip_prefixes = (
+        "api=",
+        "reportcurrenttime=",
+        "t=",
+        "start=",
+        "resumetime=",
+    )
+    parts: list[str] = []
+    frag = (parsed.fragment or "").lstrip("#")
+    if frag:
+        for seg in frag.split("&"):
+            seg = seg.strip()
+            if not seg:
+                continue
+            if seg.lower().startswith(skip_prefixes):
+                continue
+            parts.append(seg)
+    parts.append("api=all")
+    # Player cek: location.hash.includes("&reportCurrentTime=1")
+    parts.append("reportCurrentTime=1")
+    start = max(0, int(start_sec or 0))
+    if start > 30:
+        parts.append(f"resumeTime={start}")
+    new_frag = "&".join(parts)
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            new_frag,
+        )
+    )
+
+
+@app.get("/api/movies/lk21/p2p-player-url")
+async def movies_lk21_p2p_player_url(
+    embed: str = "",
+    t: float = 0,
+    user: User = Depends(require_user),
+):
+    """Bangun URL player P2P dengan hash api=all (untuk iframe langsung di halaman Movies)."""
+    del user
+    raw = (embed or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        raise HTTPException(400, "embed url tidak valid")
+    return {"url": _ensure_p2p_api_all(raw, max(0, int(t or 0)))}
+
+
 @app.get("/api/movies/lk21/poster")
 async def movies_lk21_poster(u: str = "", user: User = Depends(require_user)):
     """Proxy for movie posters so they load reliably (bypass hotlink/CORS/referer blocks on lk21 mirrors)."""
+    del user
     url = (u or "").strip()
     if not url:
         raise HTTPException(400, "u wajib")
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "invalid poster url")
+    referer = url
+    try:
+        host = urlparse(url).netloc
+        if host:
+            referer = f"https://{host}/"
+    except Exception:
+        pass
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True) as client:
             resp = await client.get(
                 url,
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Referer": referer,
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                 },
             )
             resp.raise_for_status()
@@ -1078,16 +2234,228 @@ async def movies_lk21_poster(u: str = "", user: User = Depends(require_user)):
         raise HTTPException(502, "poster proxy error") from e
 
 
+async def _run_movie_save_job(
+    job_id: str, body: MovieSaveTelegramBody, user: User
+) -> None:
+    """Background worker — progress via MOVIE_SAVE_TASKS / Downloads panel."""
+    tmp_path = None
+    slot_acquired = False
+    job = MOVIE_SAVE_TASKS.get(job_id)
+    if not job:
+        return
+    proc_holder = job["proc_holder"]
+
+    def should_cancel() -> bool:
+        return _movie_job_cancelled(job_id)
+
+    try:
+        job.update({
+            "phase": "queued",
+            "message": "Dalam antrian...",
+            "status": "queued",
+        })
+
+        await _acquire_movie_slot(job_id)
+        slot_acquired = True
+
+        job.update({
+            "status": "running",
+            "phase": "resolve",
+            "message": "Menyiapkan link stream…",
+        })
+
+        title = (body.title or "film").strip()
+
+        resolved = await resolve_m3u8_for_save(
+            m3u8=body.m3u8,
+            referer=body.referer,
+            iframe_url=body.iframe_url,
+            movie_url=body.movie_url,
+            download_url=body.download_url,
+        )
+        abyss_embed = ""
+        if len(resolved) == 3:
+            source_url, referer, abyss_embed = resolved
+        else:
+            source_url, referer = resolved
+        if should_cancel():
+            raise MovieDownloadCancelled()
+
+        job.update({
+            "phase": "download",
+            "message": "Mengunduh film…",
+            "loaded": 0,
+            "total": None,
+        })
+
+        async def on_dl(loaded: int, total: Optional[int]) -> None:
+            if should_cancel():
+                raise MovieDownloadCancelled()
+            job.update({
+                "phase": "download",
+                "loaded": loaded,
+                "total": total,
+            })
+
+        filename = sanitize_movie_filename(title)
+        quality = (body.quality or "").strip()
+        want_telegram = body.mode in ("telegram", "both")
+        want_local = body.mode in ("download", "both")
+        dl_kw = {
+            "on_progress": on_dl,
+            "should_cancel": should_cancel,
+            "proc_holder": proc_holder,
+        }
+        if source_url == "__abyss_hydrx__" and abyss_embed:
+            from .abyss_hydrx import download_abyss_to_temp
+
+            job.update({"message": "Mengunduh dari server HYDRX…"})
+            tmp_path, size = await download_abyss_to_temp(
+                abyss_embed,
+                referer,
+                filename,
+                quality=quality,
+                **dl_kw,
+            )
+        elif (
+            str(source_url).lower().endswith((".mp4", ".mkv", ".webm", ".avi"))
+            or "m3u8" not in str(source_url).lower()
+        ):
+            tmp_path, size = await download_direct_to_temp(
+                source_url, referer, filename, **dl_kw
+            )
+        else:
+            tmp_path, size = await download_hls_to_temp(
+                source_url, referer, filename, **dl_kw
+            )
+
+        if should_cancel():
+            raise MovieDownloadCancelled()
+
+        result = None
+        if want_local and tmp_path:
+            if want_telegram:
+                movie_tmp = SESSIONS_DIR / "tmp_movies"
+                movie_tmp.mkdir(parents=True, exist_ok=True)
+                stashed = movie_tmp / f"job_{job_id}_{Path(sanitize_movie_filename(filename)).name}"
+                if stashed.exists():
+                    stashed.unlink()
+                shutil.copy2(tmp_path, stashed)
+            else:
+                stashed = stash_movie_download(job_id, Path(tmp_path), filename)
+                tmp_path = None
+            job.update({
+                "local_path": str(stashed),
+                "local_filename": filename,
+                "local_download": True,
+                "local_ready_at": time.time(),
+            })
+
+        if want_telegram and tmp_path:
+            job.update({
+                "phase": "telegram",
+                "loaded": size,
+                "total": size,
+                "message": "Mengunggah ke Telegram…",
+            })
+            if should_cancel():
+                raise MovieDownloadCancelled()
+            result = await mgr.upload_file_path(
+                user.telegram_sid,
+                body.folder_id,
+                filename,
+                tmp_path,
+            )
+            tmp_path = None
+        elif tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+            tmp_path = None
+
+        messages = []
+        if result:
+            messages.append("Tersimpan di Telegram")
+        if want_local:
+            messages.append("Siap diunduh ke perangkat (menu Downloads, 24 jam)")
+        job.update({
+            "status": "done",
+            "phase": "done",
+            "file": result,
+            "message": ". ".join(messages) or "Selesai.",
+        })
+    except MovieDownloadCancelled:
+        cleanup_local_download(job)
+        job.update({
+            "status": "cancelled",
+            "phase": "cancelled",
+            "error": None,
+            "message": "Unduhan dibatalkan.",
+        })
+    except ValueError as e:
+        cleanup_local_download(job)
+        job.update({
+            "status": "error",
+            "error": str(e),
+            "message": str(e),
+        })
+    except Lk21ApiError as e:
+        cleanup_local_download(job)
+        job.update({
+            "status": "error",
+            "error": str(e),
+            "message": str(e),
+        })
+    except Exception as e:
+        cleanup_local_download(job)
+        job.update({
+            "status": "error",
+            "error": f"Gagal menyimpan film: {e}",
+            "message": str(e),
+        })
+    finally:
+        if slot_acquired:
+            MOVIE_SAVE_SEM.release()
+        _kill_movie_download_proc(job)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.get("/api/movies/qualities")
+async def movies_stream_qualities(
+    iframe_url: str = "",
+    referer: str = "",
+    movie_url: str = "",
+    m3u8: str = "",
+    user: User = Depends(require_user),
+):
+    try:
+        qualities = await list_stream_qualities(
+            m3u8=m3u8.strip(),
+            referer=referer.strip(),
+            iframe_url=iframe_url.strip(),
+            movie_url=movie_url.strip(),
+        )
+        return {"ok": True, "qualities": qualities}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        raise HTTPException(502, f"Gagal memuat kualitas: {e}") from e
+
+
 @app.post("/api/movies/lk21/save-to-telegram")
 async def movies_lk21_save_to_telegram(
     body: MovieSaveTelegramBody,
     user: User = Depends(require_user),
 ):
+    """Enqueue movie save; client tracks progress in Downloads panel (non-blocking)."""
+    if body.mode in ("telegram", "both") and not body.folder_id:
+        raise HTTPException(400, "Pilih folder Telegram untuk mode ini")
     job_id = str(uuid.uuid4())
     MOVIE_SAVE_TASKS[job_id] = {
         "id": job_id,
         "user_id": user.id,
         "title": (body.title or "film").strip(),
+        "mode": body.mode,
+        "quality": (body.quality or "").strip(),
         "status": "queued",
         "phase": "queued",
         "loaded": 0,
@@ -1096,182 +2464,22 @@ async def movies_lk21_save_to_telegram(
         "created": time.time(),
         "error": None,
         "file": None,
+        "local_download": False,
+        "local_filename": None,
+        "local_path": None,
+        "local_ready_at": None,
+        "cancel_requested": False,
+        "proc_holder": {},
     }
 
-    queue: asyncio.Queue = asyncio.Queue()
+    task = asyncio.create_task(_run_movie_save_job(job_id, body, user))
+    MOVIE_SAVE_TASKS[job_id]["worker_task"] = task
 
-    async def worker() -> None:
-        tmp_path = None
-        try:
-            await queue.put(
-                {
-                    "event": "progress",
-                    "job_id": job_id,
-                    "phase": "queued",
-                    "message": "Dalam antrian (maks 1 proses aktif untuk hemat storage)...",
-                }
-            )
-            MOVIE_SAVE_TASKS[job_id].update({
-                "phase": "queued",
-                "message": "Dalam antrian...",
-                "status": "queued",
-            })
-
-            async with MOVIE_SAVE_SEM:
-                MOVIE_SAVE_TASKS[job_id].update({
-                    "status": "running",
-                    "phase": "resolve",
-                    "message": "Menyiapkan link stream…",
-                })
-                await queue.put(
-                    {
-                        "event": "progress",
-                        "job_id": job_id,
-                        "phase": "resolve",
-                        "message": "Menyiapkan link stream…",
-                    }
-                )
-
-                title = (body.title or "film").strip()
-
-                source_url, referer = await resolve_m3u8_for_save(
-                    m3u8=body.m3u8,
-                    referer=body.referer,
-                    iframe_url=body.iframe_url,
-                    movie_url=body.movie_url,
-                )
-
-                await queue.put(
-                    {
-                        "event": "progress",
-                        "job_id": job_id,
-                        "phase": "download",
-                        "loaded": 0,
-                        "total": None,
-                        "message": "Mengunduh film…",
-                    }
-                )
-                MOVIE_SAVE_TASKS[job_id].update({
-                    "phase": "download",
-                    "message": "Mengunduh film…",
-                })
-
-                async def on_dl(loaded: int, total: Optional[int]) -> None:
-                    await queue.put(
-                        {
-                            "event": "progress",
-                            "job_id": job_id,
-                            "phase": "download",
-                            "loaded": loaded,
-                            "total": total,
-                        }
-                    )
-                    MOVIE_SAVE_TASKS[job_id].update({
-                        "phase": "download",
-                        "loaded": loaded,
-                        "total": total,
-                    })
-
-                filename = sanitize_movie_filename(title)
-                if str(source_url).lower().endswith((".mp4", ".mkv", ".webm", ".avi")) or "m3u8" not in str(source_url).lower():
-                    tmp_path, size = await download_direct_to_temp(
-                        source_url, referer, filename, on_progress=on_dl
-                    )
-                else:
-                    tmp_path, size = await download_hls_to_temp(
-                        source_url, referer, filename, on_progress=on_dl
-                    )
-
-            await queue.put(
-                {
-                    "event": "progress",
-                    "job_id": job_id,
-                    "phase": "telegram",
-                    "loaded": size,
-                    "total": size,
-                    "message": "Mengunggah ke Telegram…",
-                }
-            )
-            MOVIE_SAVE_TASKS[job_id].update({
-                "phase": "telegram",
-                "loaded": size,
-                "total": size,
-                "message": "Mengunggah ke Telegram…",
-            })
-
-            result = await mgr.upload_file_path(
-                user.telegram_sid,
-                body.folder_id,
-                filename,
-                tmp_path,
-            )
-            tmp_path = None
-            await queue.put(
-                {
-                    "event": "done",
-                    "job_id": job_id,
-                    "ok": True,
-                    "file": result,
-                    "bytes": size,
-                    "folder_id": body.folder_id,
-                }
-            )
-            MOVIE_SAVE_TASKS[job_id].update({
-                "status": "done",
-                "phase": "done",
-                "file": result,
-                "message": "Selesai. File lokal dihapus dari server.",
-            })
-        except ValueError as e:
-            await queue.put({"event": "error", "job_id": job_id, "message": str(e)})
-            MOVIE_SAVE_TASKS[job_id].update({
-                "status": "error",
-                "error": str(e),
-                "message": str(e),
-            })
-        except Lk21ApiError as e:
-            await queue.put({"event": "error", "job_id": job_id, "message": str(e)})
-            MOVIE_SAVE_TASKS[job_id].update({
-                "status": "error",
-                "error": str(e),
-                "message": str(e),
-            })
-        except Exception as e:
-            await queue.put({"event": "error", "job_id": job_id, "message": f"Gagal menyimpan film: {e}"})
-            MOVIE_SAVE_TASKS[job_id].update({
-                "status": "error",
-                "error": f"Gagal menyimpan film: {e}",
-                "message": str(e),
-            })
-        finally:
-            if tmp_path:
-                from pathlib import Path
-
-                Path(tmp_path).unlink(missing_ok=True)
-            await queue.put(None)
-
-    task = asyncio.create_task(worker())
-
-    async def event_stream():
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    yield 'data: {"event":"end"}\n\n'
-                    break
-                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-        finally:
-            await task
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "message": "Film masuk antrian. Pantau progress di menu Downloads.",
+    }
 
 
 @app.get("/api/movies/downloads")
@@ -1283,15 +2491,21 @@ async def list_movie_downloads(user: User = Depends(require_user)):
     for jid, j in list(MOVIE_SAVE_TASKS.items()):
         if j.get("user_id") != user.id:
             continue
-        # auto cleanup old done/error after 7 days
-        if j.get("status") in ("done", "error") and now - j.get("created", 0) > 86400 * 7:
+        local_ready_at = j.get("local_ready_at") or j.get("created", 0)
+        if j.get("local_path") and now - local_ready_at > LOCAL_DOWNLOAD_TTL_SEC:
+            cleanup_local_download(j)
+        # auto cleanup old done/error/cancelled after 7 days
+        if j.get("status") in ("done", "error", "cancelled") and now - j.get("created", 0) > 86400 * 7:
+            cleanup_local_download(j)
             to_remove.append(jid)
             continue
+        status = j.get("status", "unknown")
+        local_ready = bool(j.get("local_download") and j.get("local_path"))
         user_jobs.append(
             {
                 "id": jid,
                 "title": j.get("title", "film"),
-                "status": j.get("status", "unknown"),
+                "status": status,
                 "phase": j.get("phase", ""),
                 "loaded": j.get("loaded", 0),
                 "total": j.get("total"),
@@ -1299,12 +2513,76 @@ async def list_movie_downloads(user: User = Depends(require_user)):
                 "error": j.get("error"),
                 "created": j.get("created"),
                 "file": j.get("file"),
+                "mode": j.get("mode", "telegram"),
+                "quality": j.get("quality", ""),
+                "local_download": local_ready,
+                "local_filename": j.get("local_filename"),
+                "download_token": (
+                    issue_job_download_token(user_id=user.id, job_id=jid, kind="movie")
+                    if local_ready and status == "done"
+                    else None
+                ),
+                "cancellable": status in ("queued", "running"),
             }
         )
     for jid in to_remove:
+        cleanup_local_download(MOVIE_SAVE_TASKS.get(jid) or {})
         MOVIE_SAVE_TASKS.pop(jid, None)
     user_jobs.sort(key=lambda x: x.get("created", 0), reverse=True)
     return {"ok": True, "jobs": user_jobs[:50]}
+
+
+@app.post("/api/movies/downloads/{job_id}/cancel")
+async def cancel_movie_download(job_id: str, user: User = Depends(require_user)):
+    job = MOVIE_SAVE_TASKS.get(job_id)
+    if not job or job.get("user_id") != user.id:
+        raise HTTPException(404, "Job tidak ditemukan")
+    status = job.get("status", "")
+    if status in ("done", "cancelled", "error"):
+        raise HTTPException(400, "Job ini sudah selesai atau tidak bisa dibatalkan")
+    job["cancel_requested"] = True
+    _kill_movie_download_proc(job)
+    cleanup_local_download(job)
+    job.update({
+        "status": "cancelled",
+        "phase": "cancelled",
+        "message": "Membatalkan…",
+    })
+    return {"ok": True, "id": job_id, "status": "cancelled"}
+
+
+@app.get("/api/movies/downloads/{job_id}/file")
+async def download_movie_job_file(
+    job_id: str,
+    token: Optional[str] = Query(None),
+    td_account: Optional[str] = Cookie(None),
+    td_gate: Optional[str] = Cookie(None),
+    store: UserStore = Depends(get_user_store),
+):
+    user = _user_for_job_file_download(
+        job_id,
+        "movie",
+        token=token,
+        td_account=td_account,
+        td_gate=td_gate,
+        store=store,
+    )
+    job = MOVIE_SAVE_TASKS.get(job_id)
+    if not job or job.get("user_id") != user.id:
+        raise HTTPException(404, "Job tidak ditemukan")
+    if job.get("status") != "done" or not job.get("local_path"):
+        raise HTTPException(404, "File unduhan belum tersedia")
+    path = Path(str(job["local_path"]))
+    if not path.is_file():
+        cleanup_local_download(job)
+        raise HTTPException(404, "File unduhan sudah tidak ada di server")
+    filename = job.get("local_filename") or path.name
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/shares")
@@ -1494,6 +2772,39 @@ async def public_share_files(
         raise HTTPException(401, "telegram_unavailable") from None
     except Exception as e:
         raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/public/s/{token}/thumb/{message_id}")
+async def public_share_thumbnail(
+    token: str,
+    message_id: int,
+    share_store: ShareStore = Depends(get_share_store),
+    user_store: UserStore = Depends(get_user_store),
+    td_share_access: Optional[str] = Cookie(None),
+):
+    share, owner = await _load_public_share(token, share_store, user_store, td_share_access)
+    check_share_file_target(share, message_id)
+    try:
+        data, mime = await mgr.get_thumbnail_bytes(
+            owner.telegram_sid, share.folder_id, message_id
+        )
+    except ValueError as e:
+        msg = str(e)
+        if msg == "file_not_found":
+            raise HTTPException(404, "file_not_found") from e
+        if msg == "thumb_not_available":
+            raise HTTPException(404, "thumb_not_available") from e
+        raise HTTPException(401, "telegram_unavailable") from e
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={
+            "Cache-Control": "public, max-age=604800, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/public/s/{token}/preview/{message_id}")

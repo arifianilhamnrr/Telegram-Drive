@@ -15,6 +15,22 @@ data/users.db
 data/donation.json
 data/ytdlp/cookies.txt
 
+# Pencarian kode video — runtime (URL di .env, toggle admin, cookies)
+data/code_catalog.json
+data/code_catalog/*
+!data/code_catalog/.gitkeep
+
+# Runtime settings / cache (admin UI atau auto-discover)
+data/telegram_api.json
+data/lk21_domain.json
+data/anime_sources.json
+data/adult_content.json
+data/nai_home.html
+data/anime/*
+!data/anime/.gitkeep
+data/adult/*
+!data/adult/.gitkeep
+
 # Logs & install artifacts
 *.log
 install.log

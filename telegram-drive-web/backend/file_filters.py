@@ -38,8 +38,19 @@ DOCUMENT_EXTENSIONS = frozenset({
 FILTER_TYPES = frozenset({"all", "photo", "video", "document"})
 
 LIST_SCAN_LIMIT = 8000
-DEFAULT_PER_PAGE = 24
-MAX_PER_PAGE = 100
+DEFAULT_PER_PAGE = 33
+MAX_PER_PAGE = 99
+PER_PAGE_OPTIONS = (33, 66, 99)
+
+
+def normalize_per_page(value: int | str | None) -> int:
+    try:
+        n = int(value) if value is not None else DEFAULT_PER_PAGE
+    except (TypeError, ValueError):
+        return DEFAULT_PER_PAGE
+    if n in PER_PAGE_OPTIONS:
+        return n
+    return DEFAULT_PER_PAGE
 
 
 def normalize_filter_type(value: str | None) -> str:

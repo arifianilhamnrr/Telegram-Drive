@@ -13,10 +13,10 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/themes.css?v=67">
-  <link rel="stylesheet" href="/static/style.css?v=79">
-  <link rel="stylesheet" href="/static/theme-retro.css?v=79">
-  <link rel="stylesheet" href="/static/theme-glass.css?v=67">
-  <link rel="stylesheet" href="/static/movies.css?v=79">
+  <link rel="stylesheet" href="/static/style.css?v=82">
+  <link rel="stylesheet" href="/static/theme-retro.css?v=81">
+  <link rel="stylesheet" href="/static/theme-glass.css?v=69">
+  <link rel="stylesheet" href="/static/movies.css?v=107">
 </head>
 <body>
   <div id="view-gate" class="auth-wrap hidden">
@@ -61,18 +61,18 @@
 
       <div id="auth-setup">
         <h2>Hubungkan Telegram</h2>
-        <p class="sub">Setup sekali per akun — disimpan di server. API dari <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a></p>
+        <p class="sub">Admin belum mengatur API Telegram di server — isi sekali dari <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a></p>
         <label>API ID</label>
         <input type="number" id="api-id" placeholder="12345678" required>
         <label>API Hash</label>
         <input type="text" id="api-hash" placeholder="abcdef..." required>
-        <p class="hint">Credentials disimpan aman di server (session terenkripsi Telethon).</p>
+        <p class="hint">Hanya diperlukan jika admin belum set TELEGRAM_API_ID / TELEGRAM_API_HASH di server.</p>
         <button type="button" class="btn" id="btn-setup">Lanjut</button>
       </div>
 
       <div id="auth-phone" class="hidden">
-        <h2>Nomor telepon</h2>
-        <p class="sub">Format internasional, contoh +62812...</p>
+        <h2>Hubungkan Telegram</h2>
+        <p class="sub">Masukkan nomor Telegram Anda. Kode OTP dikirim lewat aplikasi Telegram.</p>
         <label>Phone</label>
         <input type="tel" id="phone" placeholder="+62..." required>
         <button type="button" class="btn" id="btn-phone">Kirim kode</button>
@@ -165,9 +165,13 @@
       </header>
 
       <div id="panel-drive" class="app-panel content scroll-area">
+        <div id="drive-access-banner" class="drive-access-banner hidden" role="status"></div>
         <section class="card files-card">
           <div class="files-head">
-            <h3>File di folder</h3>
+            <div class="files-head-title">
+              <h3>File di folder</h3>
+              <p id="files-list-summary" class="files-list-summary hint hidden"></p>
+            </div>
             <div class="files-head-actions">
               <button type="button" class="btn ghost sm" id="btn-share-folder" title="Bagikan folder">Bagikan</button>
               <button type="button" class="btn ghost sm" id="btn-refresh">Refresh</button>
@@ -177,42 +181,69 @@
               </label>
             </div>
           </div>
+
           <div class="files-toolbar">
-            <div class="file-filters" role="tablist" aria-label="Filter jenis file">
-              <button type="button" class="file-filter active" data-file-filter="all">Semua</button>
-              <button type="button" class="file-filter" data-file-filter="photo">Foto</button>
-              <button type="button" class="file-filter" data-file-filter="video">Video</button>
-              <button type="button" class="file-filter" data-file-filter="document">Dokumen</button>
+            <div class="files-toolbar-main">
+              <div class="file-filters" role="tablist" aria-label="Filter jenis file">
+                <button type="button" class="file-filter active" data-file-filter="all">Semua</button>
+                <button type="button" class="file-filter" data-file-filter="photo">Foto</button>
+                <button type="button" class="file-filter" data-file-filter="video">Video</button>
+                <button type="button" class="file-filter" data-file-filter="document">Dokumen</button>
+              </div>
+              <div class="files-search-wrap">
+                <input type="search" id="files-search" class="files-search" placeholder="Cari nama file…" autocomplete="off" maxlength="120">
+              </div>
             </div>
-            <div class="files-search-wrap">
-              <input type="search" id="files-search" class="files-search" placeholder="Cari nama file…" autocomplete="off" maxlength="120">
-            </div>
+            <label class="files-per-page" for="files-per-page">
+              <span class="files-per-page-label">Tampilkan</span>
+              <select id="files-per-page" class="files-per-page-select" aria-label="Jumlah file per halaman">
+                <option value="33">33</option>
+                <option value="66">66</option>
+                <option value="99">99</option>
+              </select>
+              <span class="files-per-page-suffix">/ halaman</span>
+            </label>
           </div>
 
           <div id="bulk-bar" class="bulk-bar hidden">
-            <span id="bulk-count">0 dipilih</span>
+            <span id="bulk-count" class="bulk-count-label">0 dipilih</span>
             <div class="bulk-actions">
               <button type="button" class="btn ghost sm" id="btn-bulk-clear">Batal pilih</button>
               <button type="button" class="btn ghost sm" id="btn-bulk-download">Download ZIP</button>
+              <button type="button" class="btn sm" id="btn-bulk-compress">Simpan ZIP ke Telegram</button>
               <button type="button" class="btn danger sm" id="btn-bulk-delete">Hapus terpilih</button>
             </div>
           </div>
-          <div id="files-empty" class="empty">Memuat daftar file...</div>
+
+          <div id="files-empty" class="empty files-empty-state">Memuat daftar file...</div>
           <div id="files-grid" class="file-grid hidden"></div>
-          <div id="files-pagination-bottom" class="files-pagination hidden"></div>
+
+          <div id="files-list-footer" class="files-list-footer hidden">
+            <div id="files-pagination-bottom" class="files-pagination"></div>
+          </div>
         </section>
       </div>
 
       <div id="panel-movies" class="app-panel content scroll-area hidden">
         <section class="card movies-card" id="movies-browse">
+          <section class="movies-recent hidden" id="movies-recent" aria-label="Terakhir ditonton">
+            <div class="movies-recent-head">
+              <h3 class="movies-recent-title">Terakhir ditonton</h3>
+              <button type="button" class="btn ghost sm" id="btn-movies-recent-clear">Hapus riwayat</button>
+            </div>
+            <div class="movies-recent-grid" id="movies-recent-grid"></div>
+          </section>
+
           <div class="movies-toolbar">
             <div class="movie-tabs" role="tablist" aria-label="Kategori film">
               <button type="button" class="movie-tab active" data-movie-kind="new">Terbaru</button>
               <button type="button" class="movie-tab" data-movie-kind="populer">Populer</button>
               <button type="button" class="movie-tab" data-movie-kind="home">Rilis</button>
+              <button type="button" class="movie-tab" data-movie-kind="drakor">Drakor</button>
+              <button type="button" class="movie-tab" data-movie-kind="anime">Anime</button>
             </div>
             <form id="form-movie-search" class="movies-search-form">
-              <input type="search" id="movie-search-input" placeholder="Cari judul film…" autocomplete="off" maxlength="80">
+              <input type="search" id="movie-search-input" placeholder="Cari judul film, drakor, anime…" autocomplete="off" maxlength="80">
               <button type="submit" class="btn sm">Cari</button>
             </form>
           </div>
@@ -220,7 +251,7 @@
           <div id="movies-loading" class="movies-state">Memuat film…</div>
           <div id="movies-error" class="movies-state error hidden"></div>
           <div id="movies-grid" class="movies-grid hidden"></div>
-          <div id="movies-pagination" class="movies-pagination hidden"></div>
+          <div id="movies-pagination" class="files-pagination hidden"></div>
         </section>
 
         <section class="card movies-card hidden" id="movies-detail">
@@ -235,15 +266,27 @@
               <h2 id="movie-detail-title" class="movies-detail-title">—</h2>
               <p id="movie-detail-sub" class="hint"></p>
               <p id="movie-detail-synopsis" class="movies-detail-synopsis hidden"></p>
-              <div class="movies-server-label">Pilih server</div>
+              <div id="movie-episodes-wrap" class="movies-episodes-wrap hidden">
+                <div class="movies-server-label">Pilih episode</div>
+                <div id="movie-episodes" class="movies-episodes"></div>
+              </div>
+              <div class="movies-server-label">Streaming</div>
               <div id="movie-servers" class="movies-servers"></div>
+              <div id="movie-quality-wrap" class="movies-quality-wrap hidden">
+                <div class="movies-server-label">Resolusi</div>
+                <select id="movie-quality" class="movies-quality-select" aria-label="Pilih resolusi video"></select>
+              </div>
               <div class="movies-save-telegram-wrap">
                 <button type="button" class="btn sm" id="btn-movie-save-telegram" disabled>
-                  Simpan ke Telegram
+                  Unduh / Simpan
                 </button>
-                <p class="hint movies-save-hint">Server akan unduh film (HLS atau P2P/embed) lalu upload ke Telegram. Proses background, lihat menu Downloads untuk status & progress.</p>
+                <p class="hint movies-save-hint">Unduh ke perangkat, simpan ke Telegram, atau keduanya. Anime OtakuDesu: resolusi dipilih otomatis (default 720p). Pantau progress di menu Downloads.</p>
               </div>
             </div>
+          </div>
+          <div id="movie-resume-bar" class="movie-resume-bar hidden" role="status">
+            <span id="movie-resume-text" class="movie-resume-text"></span>
+            <button type="button" class="btn sm" id="btn-movie-resume">Lanjut menonton</button>
           </div>
           <div class="movies-player-wrap">
             <video id="movie-player" class="movies-player" controls playsinline></video>
@@ -254,9 +297,9 @@
       </div>
 
       <div id="panel-downloads" class="app-panel content scroll-area hidden">
-        <section class="card">
-          <h3>⬇ Downloads & Movie Queue</h3>
-          <p class="hint">Proses unduh & simpan film ke Telegram berjalan di background (maks 1 aktif bersamaan untuk jaga storage server). File lokal dihapus otomatis setelah upload sukses ke Telegram Anda.</p>
+        <section class="card downloads-card">
+          <h3>⬇ Downloads & Queue</h3>
+          <p class="hint">Unduh bulk ZIP dan simpan film berjalan di background. File ZIP / film siap diunduh langsung dari server (bukan lewat Telegram lagi) — tersedia 24 jam lewat tombol <strong>Unduh file</strong>. Job antrian atau berjalan bisa dibatalkan.</p>
           <div id="downloads-list"></div>
           <div id="downloads-empty" class="hint" style="padding: 1rem 0;">Belum ada riwayat unduhan atau queue movie.</div>
         </section>
@@ -274,7 +317,7 @@
           <section class="card settings-section">
             <h3>Akun</h3>
             <p class="hint settings-account-user">Login sebagai <strong id="settings-account-name">—</strong></p>
-            <p id="settings-admin-hint" class="hint hidden">Akun admin — bagian pengaturan LK21 &amp; QRIS ada di bawah.</p>
+            <p id="settings-admin-hint" class="hint hidden">Akun admin — atur API Telegram dulu, lalu pengaturan lain di bawah.</p>
             <button type="button" class="btn ghost sm" id="btn-open-change-password">Ubah password</button>
           </section>
 
@@ -284,6 +327,38 @@
             <div class="settings-telegram-actions">
               <button type="button" class="btn ghost sm" id="btn-settings-telegram-setup">Atur koneksi Telegram</button>
               <button type="button" class="btn danger sm hidden" id="btn-settings-telegram-disconnect">Putuskan Telegram</button>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-telegram-api-section" hidden aria-hidden="true">
+            <h3>Admin — API Telegram</h3>
+            <p class="sub">Wajib diisi sekali agar user bisa hubungkan Telegram (nomor + OTP). Dapatkan dari <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a> → API development tools.</p>
+            <div class="settings-admin-box">
+              <p id="admin-telegram-api-status" class="hint settings-telegram-status">Memuat…</p>
+              <label class="settings-ytdlp-label" for="admin-telegram-api-id">API ID</label>
+              <input
+                type="number"
+                id="admin-telegram-api-id"
+                class="settings-donation-input"
+                placeholder="12345678"
+                autocomplete="off"
+                min="1"
+              />
+              <label class="settings-ytdlp-label" for="admin-telegram-api-hash">API Hash</label>
+              <input
+                type="text"
+                id="admin-telegram-api-hash"
+                class="settings-donation-input"
+                placeholder="abcdef1234567890..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <p class="hint">Disimpan di server. User tidak perlu melihat atau mengisi credentials ini.</p>
+              <div class="settings-ytdlp-actions">
+                <button type="button" class="btn sm" id="btn-admin-telegram-api-save">Simpan</button>
+              </div>
+              <div id="admin-telegram-api-error" class="error hidden"></div>
+              <div id="admin-telegram-api-ok" class="status-msg hidden"></div>
             </div>
           </section>
 
@@ -334,6 +409,53 @@
               <p id="admin-donation-status" class="hint settings-telegram-status admin-donation-status">Memuat…</p>
               <div id="admin-donation-error" class="error hidden"></div>
               <div id="admin-donation-ok" class="status-msg hidden"></div>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-code-catalog-section" hidden aria-hidden="true">
+            <h3>Admin — Sumber tambahan</h3>
+            <div class="settings-admin-box">
+              <p id="admin-code-catalog-status" class="hint settings-telegram-status">Memuat…</p>
+              <label class="settings-ytdlp-label settings-check-row">
+                <input type="checkbox" id="admin-code-catalog-enabled" />
+                Aktifkan
+              </label>
+              <div class="settings-ytdlp-actions">
+                <button type="button" class="btn sm" id="btn-admin-code-catalog-save">Simpan</button>
+              </div>
+              <div id="admin-code-catalog-error" class="error hidden"></div>
+              <div id="admin-code-catalog-ok" class="status-msg hidden"></div>
+            </div>
+          </section>
+
+          <section class="card settings-section settings-admin-card hidden" id="settings-admin-samehadaku-section" hidden aria-hidden="true">
+            <h3>Admin — Anime (OtakuDesu)</h3>
+            <p class="sub">Sumber anime sekarang OtakuDesu. Domain bisa berganti — set URL utama di bawah (default https://otakudesu.blog).</p>
+            <div class="settings-admin-box">
+              <p id="admin-samehadaku-status" class="hint settings-telegram-status">Memuat…</p>
+              <label class="settings-ytdlp-label" for="admin-samehadaku-base-url">Domain utama</label>
+              <input
+                type="url"
+                id="admin-samehadaku-base-url"
+                class="settings-donation-input"
+                placeholder="https://otakudesu.blog"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <label class="settings-ytdlp-label" for="admin-samehadaku-backups">Domain backup (satu per baris)</label>
+              <textarea
+                id="admin-samehadaku-backups"
+                class="settings-donation-input"
+                rows="4"
+                placeholder="https://otakudesu.best&#10;https://otakudesu.info"
+                spellcheck="false"
+              ></textarea>
+              <div class="settings-ytdlp-actions">
+                <button type="button" class="btn sm" id="btn-admin-samehadaku-refresh">Coba domain otomatis</button>
+                <button type="button" class="btn ghost sm" id="btn-admin-samehadaku-save">Simpan</button>
+              </div>
+              <div id="admin-samehadaku-error" class="error hidden"></div>
+              <div id="admin-samehadaku-ok" class="status-msg hidden"></div>
             </div>
           </section>
 
@@ -623,14 +745,29 @@
     <div class="modal-backdrop" data-close="modal-movie-save"></div>
     <div class="modal-card modal-panel modal-movie-save-card">
       <button type="button" class="modal-close" data-close="modal-movie-save" aria-label="Tutup">×</button>
-      <h3 id="modal-movie-save-title">Simpan film ke Telegram</h3>
+      <h3 id="modal-movie-save-title">Unduh / Simpan film</h3>
       <p class="hint" id="movie-save-film-title">—</p>
-      <p class="sub">Pilih folder tujuan — sama seperti upload file di Drive.</p>
-      <div id="movie-save-folder-list" class="movie-save-folder-list scroll-area" role="listbox" aria-label="Folder"></div>
-      <div id="movie-save-folder-loading" class="hint">Memuat folder…</div>
+      <div class="movie-save-options">
+        <label class="movie-save-label" for="movie-save-mode">Tujuan</label>
+        <select id="movie-save-mode" class="movie-save-select" aria-label="Tujuan unduhan">
+          <option value="telegram">Simpan ke Telegram</option>
+          <option value="download">Unduh ke perangkat</option>
+          <option value="both">Telegram + unduh perangkat</option>
+        </select>
+        <label class="movie-save-label" for="movie-save-quality">Resolusi</label>
+        <select id="movie-save-quality" class="movie-save-select" aria-label="Resolusi video">
+          <option value="">Otomatis (terbaik)</option>
+        </select>
+        <p class="hint movie-save-quality-hint" id="movie-save-quality-hint">Resolusi detail tersedia untuk server HYDRX.</p>
+      </div>
+      <div id="movie-save-folder-section">
+        <p class="sub">Pilih folder tujuan Telegram — sama seperti upload file di Drive.</p>
+        <div id="movie-save-folder-list" class="movie-save-folder-list scroll-area" role="listbox" aria-label="Folder"></div>
+        <div id="movie-save-folder-loading" class="hint">Memuat folder…</div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn ghost" data-close="modal-movie-save">Batal</button>
-        <button type="button" class="btn" id="btn-movie-save-start" disabled>Simpan ke folder</button>
+        <button type="button" class="btn" id="btn-movie-save-start" disabled>Mulai</button>
       </div>
       <div id="movie-save-error" class="error hidden"></div>
     </div>
@@ -665,7 +802,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js" crossorigin="anonymous"></script>
-  <script src="/static/app.js?v=79"></script>
-  <script src="/static/movies.js?v=79"></script>
+  <script src="/static/app.js?v=86"></script>
+  <script src="/static/movies.js?v=108"></script>
 </body>
 </html>

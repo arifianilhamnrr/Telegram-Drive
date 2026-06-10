@@ -271,6 +271,54 @@
   transform: rotate(-0.5deg);
 }
 
+[data-theme="retro"] .files-toolbar {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--retro-paper);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .files-head,
+[data-theme="retro"] .files-list-footer {
+  border-color: var(--retro-black);
+}
+
+[data-theme="retro"] .file-filter {
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  font-family: var(--font-grunge);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+[data-theme="retro"] .file-filter.active {
+  background: var(--retro-yellow);
+  color: var(--retro-black);
+  box-shadow: 2px 2px 0 var(--retro-black);
+}
+
+[data-theme="retro"] .files-search,
+[data-theme="retro"] .files-per-page-select,
+[data-theme="retro"] select.files-per-page-select {
+  font-family: var(--font-grunge);
+  border: 2px solid var(--retro-black);
+  border-radius: var(--radius);
+  background: var(--retro-paper);
+  color: var(--retro-black);
+}
+
+[data-theme="retro"] .files-empty-state {
+  border: 2px dashed var(--retro-black);
+  background: var(--surface2);
+}
+
+[data-theme="retro"] .files-list-summary,
+[data-theme="retro"] .files-per-page {
+  font-family: var(--font-grunge);
+}
+
 [data-theme="retro"] label,
 [data-theme="retro"] .sidebar-label,
 [data-theme="retro"] .settings-label {
@@ -370,6 +418,24 @@
 
 [data-theme="retro"] .step-dot.done { background: var(--retro-yellow); }
 [data-theme="retro"] .step-dot.active { background: var(--retro-orange); }
+
+[data-theme="retro"] #movie-episodes .btn.ghost.sm.movies-episode-btn.active,
+[data-theme="retro"] #movie-servers .btn.ghost.sm.movies-server-btn.active {
+  background: var(--retro-orange);
+  color: var(--retro-paper);
+  border: 2px solid var(--retro-black);
+  box-shadow: 2px 2px 0 var(--retro-black);
+  font-weight: 700;
+  transform: none;
+}
+
+[data-theme="retro"] #movie-episodes .btn.ghost.sm.movies-episode-btn:not(.active),
+[data-theme="retro"] #movie-servers .btn.ghost.sm.movies-server-btn:not(.active) {
+  background: transparent;
+  color: var(--retro-black);
+  border: 2px dashed var(--retro-black);
+  box-shadow: none;
+}
 
 @media (max-width: 900px) {
   [data-theme="retro"] .file-card,

@@ -1,9 +1,16 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-let config = { gate_enabled: false, registration_enabled: true, max_upload_mb: 2000, ytdlp_available: false };
+let config = {
+  gate_enabled: false,
+  registration_enabled: true,
+  max_upload_mb: 2000,
+  ytdlp_available: false,
+  telegram_api_configured: false,
+};
 let accountUsername = "";
 let accountIsAdmin = false;
+let telegramAuthenticated = false;
 let accountRegisterMode = false;
 let currentAppPanel = "drive";
 let currentFolderId = 0;
@@ -29,8 +36,46 @@ let loadedFiles = [];
 let filesFilter = "all";
 let filesSearch = "";
 let filesPage = 1;
-const FILES_PER_PAGE = 24;
-let filesListMeta = { total: 0, total_pages: 1, page: 1, filter: "all", q: "" };
+const FILES_PER_PAGE_OPTIONS = [33, 66, 99];
+const FILES_PER_PAGE_DEFAULT = 33;
+const FILES_PER_PAGE_KEY = "td-files-per-page";
+let filesPerPage = FILES_PER_PAGE_DEFAULT;
+let filesListMeta = {
+  total: 0,
+  total_pages: 1,
+  page: 1,
+  per_page: FILES_PER_PAGE_DEFAULT,
+  filter: "all",
+  q: "",
+};
+
+function normalizeFilesPerPage(value) {
+  const n = parseInt(value, 10);
+  return FILES_PER_PAGE_OPTIONS.includes(n) ? n : FILES_PER_PAGE_DEFAULT;
+}
+
+function loadFilesPerPagePreference() {
+  try {
+    const saved = parseInt(localStorage.getItem(FILES_PER_PAGE_KEY) || "", 10);
+    if (FILES_PER_PAGE_OPTIONS.includes(saved)) return saved;
+  } catch (_) {}
+  return FILES_PER_PAGE_DEFAULT;
+}
+
+function saveFilesPerPagePreference(value) {
+  try {
+    localStorage.setItem(FILES_PER_PAGE_KEY, String(value));
+  } catch (_) {}
+}
+
+function syncFilesPerPageSelect() {
+  const sel = $("#files-per-page");
+  if (!sel) return;
+  const val = String(normalizeFilesPerPage(filesPerPage));
+  if (sel.value !== val) sel.value = val;
+}
+
+filesPerPage = loadFilesPerPagePreference();
 let filesSearchTimer = null;
 let pdfPreviewTask = null;
 let pdfRenderGen = 0;
@@ -38,6 +83,32 @@ const MOTION_MS = 240;
 const SAWERIA_URL_DEFAULT = "https://saweria.co/arifianilhamnr";
 const DONATION_QR_URL = "/api/donation/qr";
 let donationInfo = { enabled: true, saweria_url: SAWERIA_URL_DEFAULT, qr_available: true };
+
+function decodeMovieDeepLink(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  for (let i = 0; i < 4; i++) {
+    try {
+      const next = decodeURIComponent(s);
+      if (next === s) break;
+      s = next;
+    } catch {
+      break;
+    }
+  }
+  if (!/^https?:\/\//i.test(s)) return null;
+  try {
+    const u = new URL(s);
+    if (u.pathname && u.pathname !== "/") {
+      u.pathname = u.pathname.replace(/\/+$/, "") + "/";
+    }
+    return u.href;
+  } catch {
+    return s;
+  }
+}
+
+window.tdDecodeMovieDeepLink = decodeMovieDeepLink;
 
 function parseAppState() {
   const p = new URLSearchParams(window.location.search);
@@ -49,11 +120,14 @@ function parseAppState() {
     state.page = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
     state.filter = p.get("filter") || "all";
     state.q = (p.get("q") || "").trim();
+    if (p.has("per_page")) {
+      state.per_page = normalizeFilesPerPage(p.get("per_page"));
+    }
   } else if (panel === "movies") {
     state.kind = p.get("kind") || "new";
     state.page = Math.max(1, parseInt(p.get("page") || "1", 10) || 1);
     state.q = (p.get("q") || "").trim();
-    state.movieUrl = p.get("movie") ? decodeURIComponent(p.get("movie")) : null;
+    state.movieUrl = decodeMovieDeepLink(p.get("movie"));
   } else if (panel === "settings") {
     state.section = p.get("section") || "";
   }
@@ -69,6 +143,7 @@ function syncAppState() {
     if (filesPage > 1) params.set("page", filesPage);
     if (filesFilter && filesFilter !== "all") params.set("filter", filesFilter);
     if (filesSearch) params.set("q", filesSearch);
+    if (filesPerPage !== FILES_PER_PAGE_DEFAULT) params.set("per_page", String(filesPerPage));
   } else if (currentAppPanel === "movies") {
     const m = window.MoviesPanel?.getState?.() || {};
     if (m.kind && m.kind !== "new") params.set("kind", m.kind);
@@ -96,18 +171,21 @@ window.addEventListener("popstate", () => {
     filesPage = s.page || 1;
     filesFilter = s.filter || "all";
     filesSearch = s.q || "";
+    if (s.per_page) {
+      filesPerPage = normalizeFilesPerPage(s.per_page);
+      saveFilesPerPagePreference(filesPerPage);
+    }
+    syncFilesPerPageSelect();
     loadFolders({ reloadFiles: false });
     loadFiles(currentFolderId);
   } else if (currentAppPanel === "movies" && window.MoviesPanel?.setState) {
     window.MoviesPanel.setState({ kind: s.kind, page: s.page, q: s.q, movieUrl: s.movieUrl });
-    if (typeof window.MoviesPanel?.onShow === "function") {
-      window.MoviesPanel.onShow({ kind: s.kind, page: s.page, q: s.q, movieUrl: s.movieUrl });
-    } else {
-      showAppPanel("movies");
-    }
+    showAppPanel("movies");
   } else if (currentAppPanel === "settings") {
     window.currentSettingsSection = s.section || "";
     showAppPanel("settings");
+  } else if (currentAppPanel === "downloads") {
+    showAppPanel("downloads");
   }
 });
 let donateQrBound = false;
@@ -128,7 +206,10 @@ function setAdminSectionVisible(el, visible) {
     el.hidden = false;
     el.setAttribute("aria-hidden", "false");
     // track for URL persistence
-    if (el.id === "settings-admin-lk21-section") window.currentSettingsSection = "lk21";
+    if (el.id === "settings-admin-telegram-api-section") window.currentSettingsSection = "telegram_api";
+    else if (el.id === "settings-admin-samehadaku-section") window.currentSettingsSection = "samehadaku";
+    else if (el.id === "settings-admin-lk21-section") window.currentSettingsSection = "lk21";
+    else if (el.id === "settings-admin-code-catalog-section") window.currentSettingsSection = "code_catalog";
     else if (el.id === "settings-admin-donation-section") window.currentSettingsSection = "donation";
     else if (el.id === "settings-admin-section") window.currentSettingsSection = "ytdlp";
   } else {
@@ -310,7 +391,8 @@ function routeSessionError(msg, detail) {
     showAccountView(config.registration_enabled !== false);
   } else if (code === "telegram_required" || code === "not_authenticated") {
     showView("auth");
-    setAuthStep(0);
+    applyTelegramAuthUi();
+    setAuthStep(telegramApiFromServer() ? 1 : 0);
   }
 }
 
@@ -621,6 +703,7 @@ async function importUrlWithProgress(body) {
 
 window.tdRunSsePost = runSsePost;
 window.tdHideTransferLoader = hideTransferLoader;
+window.tdShowAppPanel = showAppPanel;
 window.tdGetCurrentFolderId = () => normalizeFolderId(currentFolderId);
 window.tdGetCurrentFolderName = () => currentFolderName;
 window.tdOpenModal = openModal;
@@ -700,6 +783,16 @@ function isVideoFile(file) {
   return ext in VIDEO_MIME_BY_EXT || /\.(mov|mp4|m4v|webm|mkv|avi|3gp|3g2)$/i.test(file.name || "");
 }
 
+function isImageFile(file) {
+  if (!file) return false;
+  const mime = (file.mime || "").toLowerCase();
+  const ext = (file.ext || fileExt(file.name) || "").toLowerCase();
+  if (mime.startsWith("image/") && mime !== "application/octet-stream") return true;
+  if (file.kind === "image") return true;
+  return /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i.test(file.name || "") ||
+    ["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif"].includes(ext);
+}
+
 function videoMimeType(file) {
   const mime = (file.mime || "").toLowerCase();
   if (mime.startsWith("video/") && mime !== "application/octet-stream") return mime;
@@ -717,6 +810,57 @@ function isPreviewableFile(file) {
 
 function previewUrl(folderId, messageId) {
   return `/api/preview/${folderId}/${messageId}`;
+}
+
+function thumbUrl(folderId, messageId) {
+  return `/api/thumb/${folderId}/${messageId}`;
+}
+
+let thumbLazyObserver = null;
+
+function ensureThumbLazyObserver() {
+  if (thumbLazyObserver) return thumbLazyObserver;
+  thumbLazyObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const img = entry.target;
+        const src = img.dataset.thumbSrc;
+        if (src && !img.getAttribute("src")) {
+          img.src = src;
+          img.removeAttribute("data-thumb-src");
+        }
+        thumbLazyObserver.unobserve(img);
+      });
+    },
+    { root: null, rootMargin: "160px 0px", threshold: 0.01 }
+  );
+  return thumbLazyObserver;
+}
+
+function onThumbImageError(img) {
+  if (!img) return;
+  img.hidden = true;
+  const wrap = img.closest(".file-thumb");
+  const fb = wrap?.querySelector(".file-thumb-fallback");
+  if (fb) {
+    fb.hidden = false;
+    wrap?.classList.add("thumb-fallback");
+  }
+}
+
+function setupLazyThumbs(root = document) {
+  const scope = root.querySelectorAll ? root : document;
+  const imgs = scope.querySelectorAll?.("img.file-thumb-media[data-thumb-src]") || [];
+  if (!imgs.length) return;
+  const obs = ensureThumbLazyObserver();
+  imgs.forEach((img) => {
+    if (!img._thumbErrBound) {
+      img._thumbErrBound = true;
+      img.addEventListener("error", () => onThumbImageError(img), { once: true });
+    }
+    obs.observe(img);
+  });
 }
 
 function formatSize(bytes) {
@@ -1164,23 +1308,55 @@ function renderFileThumb(folderId, file) {
       ${fileTypeBadgeHtml(file)}
     </button>`;
   }
-  if (isPreviewableFile(file)) {
-    const url = previewUrl(folderId, file.id);
-    if (isVideoFile(file)) {
-      return `<div class="file-thumb file-thumb-video" data-preview-id="${file.id}">
-        <video src="${url}" muted preload="metadata"></video>
-        <span class="play-badge">▶</span>
-      </div>`;
-    }
-    return `<button type="button" class="file-thumb file-thumb-img" data-preview-id="${file.id}">
-      <img src="${url}" alt="" loading="lazy">
-    </button>`;
+  if (isPreviewableFile(file) && (isImageFile(file) || isVideoFile(file))) {
+    const url = thumbUrl(folderId, file.id);
+    const isVideo = isVideoFile(file);
+    const tag = isVideo ? "div" : "button type=\"button\"";
+    const close = isVideo ? "div" : "button";
+    const titleAttr = isVideo ? "" : ` title="${escapeHtml(file.name)}"`;
+    const videoCls = isVideo ? " file-thumb-video" : " file-thumb-img";
+    return `<${tag} class="file-thumb${videoCls}" data-preview-id="${file.id}"${titleAttr}>
+      <img class="file-thumb-media" data-thumb-src="${url}" alt="" decoding="async" loading="lazy" width="72" height="72">
+      ${isVideo ? '<span class="play-badge">▶</span>' : ""}
+      <span class="file-thumb-fallback" hidden>${fileTypeBadgeHtml(file)}</span>
+    </${close}>`;
   }
   return `<div class="file-thumb file-thumb-icon">${fileTypeBadgeHtml(file)}</div>`;
 }
 
+function telegramApiFromServer() {
+  return !!config.telegram_api_configured;
+}
+
+function applyTelegramAuthUi() {
+  const fromServer = telegramApiFromServer();
+  const firstDot = document.querySelector("#auth-steps .step-dot[data-step='0']");
+  const backSetup = $("#btn-back-setup");
+  if (firstDot) firstDot.style.display = fromServer ? "none" : "";
+  if (backSetup) backSetup.style.display = fromServer ? "none" : "";
+}
+
+function mapTelegramAuthStep(tg) {
+  if (!tg || tg.authenticated) return null;
+  const step = tg.step || "setup";
+  if (telegramApiFromServer()) {
+    if (step === "code") return 2;
+    if (step === "password") return 3;
+    return 1;
+  }
+  if (step === "phone") return 1;
+  if (step === "code") return 2;
+  if (step === "password") return 3;
+  return 0;
+}
+
 function setAuthStep(n) {
+  if (telegramApiFromServer() && n === 0) n = 1;
   $$(".step-dot").forEach((d, i) => {
+    if (telegramApiFromServer() && i === 0) {
+      d.classList.remove("active", "done");
+      return;
+    }
     d.classList.toggle("active", i === n);
     d.classList.toggle("done", i < n);
   });
@@ -1247,15 +1423,89 @@ function updateAccountFormMode(allowRegister = true) {
   }
 }
 
+function hasDriveAccess() {
+  return telegramApiFromServer() && telegramAuthenticated;
+}
+
+function showAuthBlockedMessage(message) {
+  showView("auth");
+  hide($("#auth-setup"));
+  hide($("#auth-phone"));
+  hide($("#auth-code"));
+  hide($("#auth-2fa"));
+  const err = $("#auth-error");
+  if (err) {
+    err.textContent = message;
+    err.style.color = "";
+    show(err);
+  }
+}
+
+function updateDriveAccessBanner() {
+  const banner = $("#drive-access-banner");
+  if (!banner) return;
+  if (hasDriveAccess()) {
+    hide(banner);
+    banner.textContent = "";
+    banner.classList.remove("is-warn");
+    return;
+  }
+  show(banner);
+  banner.classList.add("is-warn");
+  if (!telegramApiFromServer()) {
+    banner.innerHTML = accountIsAdmin
+      ? 'Drive belum aktif. <button type="button" class="link-btn" id="drive-goto-telegram-api">Atur API Telegram</button> di Pengaturan (Admin) terlebih dahulu.'
+      : "Drive belum aktif — admin belum mengatur API Telegram. Hubungi admin.";
+  } else {
+    banner.innerHTML =
+      'Drive belum aktif. <button type="button" class="link-btn" id="drive-goto-telegram-setup">Hubungkan Telegram</button> di Pengaturan (nomor + OTP).';
+  }
+  $("#drive-goto-telegram-api")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    window.currentSettingsSection = "telegram_api";
+    showAppPanel("settings");
+  });
+  $("#drive-goto-telegram-setup")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    api("/api/auth/status")
+      .then((st) => applyTelegramRoute(st))
+      .catch(() => {
+        showView("auth");
+        applyTelegramAuthUi();
+        setAuthStep(telegramApiFromServer() ? 1 : 0);
+      });
+  });
+}
+
 function applyTelegramRoute(tg) {
+  applyTelegramAuthUi();
+  telegramAuthenticated = !!tg?.authenticated;
   if (tg?.authenticated) {
     enterApp(tg);
     return;
   }
+  if (accountIsAdmin) {
+    enterApp({ authenticated: false, user: {} });
+    if (!telegramApiFromServer()) {
+      window.currentSettingsSection = "telegram_api";
+      showAppPanel("settings");
+      notifySuccess(
+        "Atur API Telegram di Pengaturan (Admin). Setelah itu hubungkan Telegram untuk mengaktifkan Drive.",
+        "Setup admin"
+      );
+    }
+    return;
+  }
+  if (!telegramApiFromServer()) {
+    showAuthBlockedMessage(
+      "API Telegram belum dikonfigurasi admin. Hubungi admin lalu login kembali."
+    );
+    return;
+  }
   showView("auth");
-  if (tg?.step === "code") setAuthStep(2);
-  else if (tg?.step === "phone") setAuthStep(1);
-  else setAuthStep(0);
+  hideError($("#auth-error"));
+  const step = mapTelegramAuthStep(tg);
+  setAuthStep(step == null ? 1 : step);
 }
 
 async function bootstrapAfterGate() {
@@ -1286,7 +1536,9 @@ async function refreshSettingsTelegramStatus() {
       if (btnSetup) btnSetup.textContent = "Ubah koneksi Telegram";
       if (btnDisc) show(btnDisc);
     } else {
-      box.textContent = "Belum terhubung — atur API ID, nomor, dan OTP sekali saja.";
+      box.textContent = telegramApiFromServer()
+        ? "Belum terhubung — masukkan nomor Telegram dan OTP."
+        : "Belum terhubung — atur API ID (atau minta admin), lalu nomor dan OTP.";
       if (btnSetup) btnSetup.textContent = "Hubungkan Telegram";
       if (btnDisc) hide(btnDisc);
     }
@@ -1450,6 +1702,41 @@ function formatLk21AdminStatus(data) {
   return `Aktif: ${base} (sumber: ${src}${mode}${env}${auto})`;
 }
 
+function formatSamehadakuAdminStatus(data) {
+  const base = data?.base_url || "(belum diketahui)";
+  const src = data?.source || "—";
+  const env = data?.env_override ? " · env override" : "";
+  const auto = data?.auto_discover === false ? " · auto-discover off" : "";
+  const backups = (data?.backup_domains || []).filter(Boolean);
+  const backupText = backups.length ? ` · backup: ${backups.join(", ")}` : "";
+  return `Aktif: ${base} (sumber: ${src}${env}${auto}${backupText})`;
+}
+
+async function refreshAdminSamehadakuForm() {
+  const status = $("#admin-samehadaku-status");
+  const input = $("#admin-samehadaku-base-url");
+  const backups = $("#admin-samehadaku-backups");
+  const errBox = $("#admin-samehadaku-error");
+  const okBox = $("#admin-samehadaku-ok");
+  hide(errBox);
+  hide(okBox);
+  if (status) {
+    status.textContent = "Memuat domain OtakuDesu…";
+    status.classList.remove("is-bad");
+  }
+  try {
+    const data = await api("/api/admin/samehadaku");
+    if (status) status.textContent = formatSamehadakuAdminStatus(data);
+    if (input && data.base_url) input.value = data.base_url;
+    if (backups) backups.value = (data.backup_domains || []).join("\n");
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "Gagal memuat status Samehadaku";
+      status.classList.add("is-bad");
+    }
+  }
+}
+
 async function refreshAdminLk21Form() {
   const status = $("#admin-lk21-status");
   const input = $("#admin-lk21-base-url");
@@ -1473,20 +1760,107 @@ async function refreshAdminLk21Form() {
   }
 }
 
+function formatCodeCatalogAdminStatus(data) {
+  if (!data?.configured) return "Belum dikonfigurasi";
+  return data.enabled ? "Aktif" : "Nonaktif";
+}
+
+async function refreshAdminCodeCatalogForm() {
+  const status = $("#admin-code-catalog-status");
+  const toggle = $("#admin-code-catalog-enabled");
+  const errBox = $("#admin-code-catalog-error");
+  const okBox = $("#admin-code-catalog-ok");
+  hide(errBox);
+  hide(okBox);
+  if (status) status.textContent = "Memuat…";
+  try {
+    const data = await api("/api/admin/code-catalog");
+    if (status) status.textContent = formatCodeCatalogAdminStatus(data);
+    if (toggle) toggle.checked = !!data.toggle_enabled;
+    if (toggle) toggle.disabled = !data.configured;
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "Gagal memuat";
+      status.classList.add("is-bad");
+    }
+  }
+}
+
+function scrollToSettingsSection(sectionId) {
+  const el = document.getElementById(sectionId);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function formatTelegramApiAdminStatus(data) {
+  if (!data?.configured) return "Belum diatur — wajib diisi agar Drive & koneksi Telegram user bisa jalan.";
+  if (data.source === "env") return "Aktif dari .env server (TELEGRAM_API_ID / TELEGRAM_API_HASH).";
+  return "Aktif — tersimpan di server. User cukup nomor + OTP.";
+}
+
+async function refreshAdminTelegramApiForm() {
+  const status = $("#admin-telegram-api-status");
+  const inputId = $("#admin-telegram-api-id");
+  const inputHash = $("#admin-telegram-api-hash");
+  const saveBtn = $("#btn-admin-telegram-api-save");
+  const errBox = $("#admin-telegram-api-error");
+  const okBox = $("#admin-telegram-api-ok");
+  hide(errBox);
+  hide(okBox);
+  if (status) {
+    status.textContent = "Memuat…";
+    status.classList.remove("is-bad");
+  }
+  try {
+    const data = await api("/api/admin/telegram-api");
+    if (status) status.textContent = formatTelegramApiAdminStatus(data);
+    if (inputId) inputId.value = data.api_id ? String(data.api_id) : "";
+    if (inputHash) {
+      inputHash.value = "";
+      inputHash.placeholder = data.api_hash_set
+        ? "Sudah tersimpan — isi ulang untuk mengganti"
+        : "abcdef1234567890...";
+    }
+    const locked = !!data.env_override;
+    if (inputId) inputId.disabled = locked;
+    if (inputHash) inputHash.disabled = locked;
+    if (saveBtn) saveBtn.disabled = locked;
+    config.telegram_api_configured = !!data.configured;
+    applyTelegramAuthUi();
+    updateDriveAccessBanner();
+  } catch (err) {
+    if (status) {
+      status.textContent = err.message || "Gagal memuat";
+      status.classList.add("is-bad");
+    }
+  }
+}
+
 async function refreshAdminSections() {
+  const telegramApiSec = $("#settings-admin-telegram-api-section");
   const donationSec = $("#settings-admin-donation-section");
+  const codeCatalogSec = $("#settings-admin-code-catalog-section");
+  const samehadakuSec = $("#settings-admin-samehadaku-section");
   const lk21Sec = $("#settings-admin-lk21-section");
   const ytdlpSec = $("#settings-admin-section");
   if (!accountIsAdmin) {
+    setAdminSectionVisible(telegramApiSec, false);
     setAdminSectionVisible(donationSec, false);
+    setAdminSectionVisible(codeCatalogSec, false);
+    setAdminSectionVisible(samehadakuSec, false);
     setAdminSectionVisible(lk21Sec, false);
     setAdminSectionVisible(ytdlpSec, false);
     return;
   }
+  setAdminSectionVisible(telegramApiSec, true);
+  window.currentSettingsSection = "telegram_api";
+  await refreshAdminTelegramApiForm();
   setAdminSectionVisible(donationSec, true);
   await refreshAdminDonationForm();
+  setAdminSectionVisible(codeCatalogSec, true);
+  await refreshAdminCodeCatalogForm();
+  setAdminSectionVisible(samehadakuSec, true);
+  await refreshAdminSamehadakuForm();
   setAdminSectionVisible(lk21Sec, true);
-  window.currentSettingsSection = "lk21";
   await refreshAdminLk21Form();
   setAdminSectionVisible(ytdlpSec, false);
 }
@@ -1494,7 +1868,18 @@ async function refreshAdminSections() {
 function openSettingsPage() {
   renderThemePicker();
   refreshSettingsTelegramStatus();
-  void refreshAdminSections();
+  void refreshAdminSections().then(() => {
+    const sectionMap = {
+      telegram_api: "settings-admin-telegram-api-section",
+      donation: "settings-admin-donation-section",
+      code_catalog: "settings-admin-code-catalog-section",
+      samehadaku: "settings-admin-samehadaku-section",
+      lk21: "settings-admin-lk21-section",
+      ytdlp: "settings-admin-section",
+    };
+    const sec = sectionMap[window.currentSettingsSection];
+    if (sec) scrollToSettingsSection(sec);
+  });
   const nameEl = $("#settings-account-name");
   if (nameEl) nameEl.textContent = accountUsername || "—";
   if (accountIsAdmin) {
@@ -1607,6 +1992,47 @@ $("#form-admin-ytdlp-cookies")?.addEventListener("submit", async (e) => {
   }
 });
 
+$("#btn-admin-telegram-api-save")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-telegram-api-save");
+  const errBox = $("#admin-telegram-api-error");
+  const okBox = $("#admin-telegram-api-ok");
+  const status = $("#admin-telegram-api-status");
+  const apiId = parseInt($("#admin-telegram-api-id")?.value || "", 10);
+  const apiHash = ($("#admin-telegram-api-hash")?.value || "").trim();
+  hide(errBox);
+  hide(okBox);
+  if (!apiId || !apiHash) {
+    return showError(errBox, "API ID dan API Hash wajib diisi");
+  }
+  setBtnLoading(btn, true, "Menyimpan…");
+  try {
+    const data = await api("/api/admin/telegram-api", {
+      method: "POST",
+      body: { api_id: apiId, api_hash: apiHash },
+    });
+    config.telegram_api_configured = !!data.configured;
+    applyTelegramAuthUi();
+    updateDriveAccessBanner();
+    if (status) status.textContent = formatTelegramApiAdminStatus(data);
+    const hashInput = $("#admin-telegram-api-hash");
+    if (hashInput) {
+      hashInput.value = "";
+      hashInput.placeholder = "Sudah tersimpan — isi ulang untuk mengganti";
+    }
+    if (okBox) {
+      okBox.textContent =
+        "API Telegram disimpan. Hubungkan Telegram di bagian atas, lalu Drive siap dipakai.";
+      okBox.style.color = "var(--ok)";
+      show(okBox);
+    }
+    notifySuccess("API Telegram disimpan.", "Admin");
+  } catch (err) {
+    showError(errBox, err.message);
+  } finally {
+    setBtnLoading(btn, false, "");
+  }
+});
+
 $("#form-admin-donation")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const errBox = $("#admin-donation-error");
@@ -1649,6 +2075,98 @@ $("#form-admin-donation")?.addEventListener("submit", async (e) => {
     showError(errBox, err.message);
   } finally {
     setBtnLoading(btn, false, "");
+  }
+});
+
+$("#btn-admin-code-catalog-save")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-code-catalog-save");
+  const errBox = $("#admin-code-catalog-error");
+  const okBox = $("#admin-code-catalog-ok");
+  const status = $("#admin-code-catalog-status");
+  const enabled = !!$("#admin-code-catalog-enabled")?.checked;
+  hide(errBox);
+  hide(okBox);
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/code-catalog", {
+      method: "POST",
+      body: { enabled },
+    });
+    if (status) status.textContent = formatCodeCatalogAdminStatus(data);
+    if (okBox) {
+      okBox.textContent = "Disimpan.";
+      okBox.style.color = "var(--ok)";
+      show(okBox);
+    }
+    if (typeof MoviesPanel !== "undefined" && MoviesPanel.refreshCodeCatalogStatus) {
+      await MoviesPanel.refreshCodeCatalogStatus();
+    }
+  } catch (err) {
+    showError(errBox, err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+$("#btn-admin-samehadaku-refresh")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-samehadaku-refresh");
+  const errBox = $("#admin-samehadaku-error");
+  const okBox = $("#admin-samehadaku-ok");
+  const status = $("#admin-samehadaku-status");
+  hide(errBox);
+  hide(okBox);
+  if (btn) setBtnLoading(btn, true, "Mencoba…");
+  try {
+    const data = await api("/api/admin/samehadaku/refresh-domain", { method: "POST" });
+    if (status) status.textContent = formatSamehadakuAdminStatus(data);
+    if ($("#admin-samehadaku-base-url") && data.base_url) {
+      $("#admin-samehadaku-base-url").value = data.base_url;
+    }
+    show(okBox);
+    if (okBox) okBox.textContent = data.message || "Domain diperbarui";
+  } catch (err) {
+    show(errBox);
+    if (errBox) errBox.textContent = err.message || "Gagal refresh domain";
+  } finally {
+    if (btn) setBtnLoading(btn, false, "Coba domain otomatis");
+  }
+});
+
+$("#btn-admin-samehadaku-save")?.addEventListener("click", async () => {
+  const btn = $("#btn-admin-samehadaku-save");
+  const errBox = $("#admin-samehadaku-error");
+  const okBox = $("#admin-samehadaku-ok");
+  const status = $("#admin-samehadaku-status");
+  const baseUrl = ($("#admin-samehadaku-base-url")?.value || "").trim();
+  const backupRaw = ($("#admin-samehadaku-backups")?.value || "").trim();
+  const backupDomains = backupRaw
+    ? backupRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    : [];
+  hide(errBox);
+  hide(okBox);
+  if (!baseUrl) {
+    show(errBox);
+    if (errBox) errBox.textContent = "Domain utama wajib diisi";
+    return;
+  }
+  if (btn) setBtnLoading(btn, true, "Menyimpan…");
+  try {
+    await api("/api/admin/samehadaku", {
+      method: "POST",
+      body: { base_url: baseUrl },
+    });
+    await api("/api/admin/samehadaku/backups", {
+      method: "POST",
+      body: { backup_domains: backupDomains },
+    });
+    await refreshAdminSamehadakuForm();
+    show(okBox);
+    if (okBox) okBox.textContent = data.message || "Pengaturan Samehadaku disimpan";
+  } catch (err) {
+    show(errBox);
+    if (errBox) errBox.textContent = err.message || "Gagal menyimpan";
+  } finally {
+    if (btn) setBtnLoading(btn, false, "Simpan");
   }
 });
 
@@ -1770,14 +2288,46 @@ $("#btn-open-change-password")?.addEventListener("click", () => {
   openModal("modal-change-password");
 });
 
+/** Muat ulang folder/file saat kembali ke tab Drive (hindari list kosong setelah dari Movies). */
+async function refreshDrivePanel(forceFolders = false) {
+  if (currentAppPanel !== "drive") return;
+  updateDriveAccessBanner();
+  if (!hasDriveAccess()) {
+    hide($("#files-grid"));
+    const empty = $("#files-empty");
+    if (empty) hide(empty);
+    return;
+  }
+  const folderList = $("#folder-list");
+  const hasFolders = folderList && folderList.children.length > 0;
+  try {
+    if (forceFolders || !hasFolders) {
+      await loadFolders({ reloadFiles: true, allowMissing: true });
+    } else {
+      await loadFiles(currentFolderId);
+    }
+  } catch (e) {
+    const empty = $("#files-empty");
+    if (empty) {
+      show(empty);
+      empty.textContent = e.message || "Gagal memuat file.";
+    }
+    hide($("#files-grid"));
+  }
+}
+
 function showAppPanel(panel) {
   const oldPanel = currentAppPanel;
-  const p = panel === "settings" || panel === "movies" ? panel : "drive";
+  const p =
+    panel === "settings" || panel === "movies" || panel === "downloads"
+      ? panel
+      : "drive";
   currentAppPanel = p;
 
   // clear movie deep link when leaving movies panel via nav (not via internal back)
-  if (oldPanel === "movies" && p !== "movies" && window.MoviesPanel?.setState) {
-    window.MoviesPanel.setState({ movieUrl: null });
+  if (oldPanel === "movies" && p !== "movies") {
+    if (window.MoviesPanel?.onHide) window.MoviesPanel.onHide();
+    if (window.MoviesPanel?.setState) window.MoviesPanel.setState({ movieUrl: null });
   }
   const drivePanel = $("#panel-drive");
   const settingsPanel = $("#panel-settings");
@@ -1803,16 +2353,12 @@ function showAppPanel(panel) {
   if (currentAppPanel === "settings") {
     show(settingsPanel);
     hide(foldersNav);
-    $("#folder-title").textContent = "Pengaturan";
-    if (fileCount) fileCount.textContent = "Tema, akun & Telegram";
     openSettingsPage();
     activePanel = settingsPanel;
   } else if (currentAppPanel === "movies") {
     show(moviesPanel);
     hide(foldersNav);
     show(topbarActionsMovies);
-    $("#folder-title").textContent = "Movie";
-    if (fileCount) fileCount.textContent = "Film LK21 (scrape + stream)";
     window.MoviesPanel?.onShow?.();
     activePanel = moviesPanel;
   } else if (currentAppPanel === "downloads") {
@@ -1820,8 +2366,6 @@ function showAppPanel(panel) {
     hide(foldersNav);
     hide(topbarActionsDrive);
     hide(topbarActionsMovies);
-    $("#folder-title").textContent = "Downloads / Queue";
-    if (fileCount) fileCount.textContent = "Status unduhan & simpan movie ke Telegram";
     loadMovieDownloads();
     activePanel = downloadsPanel;
     // simple poll while visible
@@ -1839,10 +2383,11 @@ function showAppPanel(panel) {
     show(drivePanel);
     show(foldersNav);
     show(topbarActionsDrive);
-    setFolderHeader(currentFolderName);
-    if (fileCount) updateFileCountLabel();
     activePanel = drivePanel;
+    updateDriveAccessBanner();
+    void refreshDrivePanel(oldPanel !== "drive");
   }
+  updateTopbarForPanel();
   if (activePanel) {
     activePanel.classList.remove("panel-enter");
     void activePanel.offsetWidth;
@@ -1924,7 +2469,8 @@ $("#btn-settings-telegram-setup")?.addEventListener("click", () => {
     .then((st) => applyTelegramRoute(st))
     .catch(() => {
       showView("auth");
-      setAuthStep(0);
+      applyTelegramAuthUi();
+      setAuthStep(telegramApiFromServer() ? 1 : 0);
     });
 });
 
@@ -1950,6 +2496,7 @@ $("#btn-flood-wait-ok")?.addEventListener("click", closeFloodWaitModal);
 async function init() {
   initTheme();
   config = await api("/api/config");
+  applyTelegramAuthUi();
   applyDonationInfo(config.donation);
   applyUploadLimitHints();
   await bootstrapAfterGate();
@@ -1958,8 +2505,10 @@ async function init() {
 
 function enterApp(st) {
   showView("app");
+  telegramAuthenticated = !!st?.authenticated;
   const u = st.user || {};
   $("#user-box").innerHTML = renderUserBox(u);
+  updateDriveAccessBanner();
 
   // Restore full app state from URL on initial load / refresh
   const urlState = parseAppState();
@@ -1970,6 +2519,11 @@ function enterApp(st) {
     if (urlState.page) filesPage = urlState.page;
     if (urlState.filter) filesFilter = urlState.filter;
     if (urlState.q) filesSearch = urlState.q;
+    if (urlState.per_page) {
+      filesPerPage = normalizeFilesPerPage(urlState.per_page);
+      saveFilesPerPagePreference(filesPerPage);
+    }
+    syncFilesPerPageSelect();
   } else if (currentAppPanel === "movies" && window.MoviesPanel?.setState) {
     window.MoviesPanel.setState({
       kind: urlState.kind || "new",
@@ -1985,17 +2539,45 @@ function enterApp(st) {
   showAppPanel(currentAppPanel);
 
   if (currentAppPanel === "drive") {
-    loadFolders();
+    if (hasDriveAccess()) void loadFolders();
+  } else {
+    void loadFolders({ reloadFiles: false }).catch(() => {});
   }
   // ensure URL is clean
   syncAppState();
 }
 
 function setFolderHeader(name) {
+  if (currentAppPanel !== "drive") return;
   $("#folder-title").textContent = name;
   const target = $("#upload-target-name");
   if (target) target.textContent = name;
 }
+
+function updateTopbarForPanel() {
+  const titleEl = $("#folder-title");
+  const fileCount = $("#file-count");
+  if (!titleEl) return;
+  if (currentAppPanel === "settings") {
+    titleEl.textContent = "Pengaturan";
+    if (fileCount) fileCount.textContent = "Tema, akun & Telegram";
+    return;
+  }
+  if (currentAppPanel === "movies") {
+    titleEl.textContent = "Movie";
+    if (fileCount) fileCount.textContent = "Film LK21 (scrape + stream)";
+    return;
+  }
+  if (currentAppPanel === "downloads") {
+    titleEl.textContent = "Downloads / Queue";
+    if (fileCount) fileCount.textContent = "Status unduhan & simpan movie ke Telegram";
+    return;
+  }
+  setFolderHeader(currentFolderName);
+  if (fileCount) updateFileCountLabel();
+}
+
+window.updateTopbarForPanel = updateTopbarForPanel;
 
 function resetUploadModalState() {
   clearUploadPreview();
@@ -2026,12 +2608,19 @@ function openUploadModal(mode = "file") {
 function resetFileListUI() {
   const empty = $("#files-empty");
   const grid = $("#files-grid");
+  const summary = $("#files-list-summary");
+  const footer = $("#files-list-footer");
   if (grid) grid.innerHTML = "";
   if (empty) {
     empty.textContent = "Memuat daftar file...";
     show(empty);
   }
   if (grid) hide(grid);
+  if (summary) {
+    summary.textContent = "";
+    hide(summary);
+  }
+  hide(footer);
 }
 
 async function loadFolders(options = {}) {
@@ -2098,7 +2687,9 @@ async function loadFolders(options = {}) {
   }
   if (match) {
     currentFolderName = match.name;
-    setFolderHeader(match.name);
+    if (currentAppPanel === "drive") {
+      setFolderHeader(match.name);
+    }
     $$(".folder-item").forEach((el) => {
       el.classList.toggle("active", sameFolderId(el.dataset.folderId, match.id));
     });
@@ -2260,6 +2851,17 @@ $("#files-search")?.addEventListener("search", () => {
   loadFiles(currentFolderId);
 });
 
+$("#files-per-page")?.addEventListener("change", () => {
+  const next = normalizeFilesPerPage($("#files-per-page")?.value);
+  if (next === filesPerPage) return;
+  filesPerPage = next;
+  saveFilesPerPagePreference(filesPerPage);
+  filesPage = 1;
+  clearSelection();
+  syncAppState();
+  loadFiles(currentFolderId);
+});
+
 function clearSelection() {
   selectedIds.clear();
   updateBulkBar();
@@ -2308,6 +2910,7 @@ function updateFileCountLabel() {
   const pages = filesListMeta.total_pages || 1;
   const ft = filesListMeta.filter || "all";
   const q = (filesListMeta.q || "").trim();
+  const perPage = filesListMeta.per_page || filesPerPage;
   let label = FILE_FILTER_LABELS[ft] || "file";
   if (total === 0) {
     el.textContent = q || ft !== "all" ? `0 ${label}` : "0 file";
@@ -2318,16 +2921,31 @@ function updateFileCountLabel() {
   } else {
     el.textContent = `${total} ${label}`;
   }
+
+  const summary = $("#files-list-summary");
+  if (!summary) return;
+  if (total === 0) {
+    hide(summary);
+    summary.textContent = "";
+    return;
+  }
+  const start = (page - 1) * perPage + 1;
+  const end = Math.min(page * perPage, total);
+  let text = `Menampilkan ${start}–${end} dari ${total} ${label}`;
+  if (pages > 1) text += ` · halaman ${page}/${pages}`;
+  summary.textContent = text;
+  show(summary);
 }
 
 function renderFilesPagination() {
+  const footer = $("#files-list-footer");
   const bottom = $("#files-pagination-bottom");
   const pages = filesListMeta.total_pages || 1;
   const page = filesListMeta.page || 1;
   const total = filesListMeta.total || 0;
 
   if (!total || pages <= 1) {
-    hide(bottom);
+    hide(footer);
     if (bottom) bottom.innerHTML = "";
     return;
   }
@@ -2336,7 +2954,7 @@ function renderFilesPagination() {
   const html = buildPaginationHtml(page, pages, isMobile);
   if (bottom) {
     bottom.innerHTML = html;
-    show(bottom);
+    show(footer);
     bottom.querySelectorAll("[data-page]").forEach((btn) => {
       btn.onclick = () => {
         const p = parseInt(btn.dataset.page, 10);
@@ -2411,15 +3029,19 @@ function buildPaginationHtml(page, pages, isMobile = false) {
   return `<div class="files-pagination-inner">${parts.join("")}</div>`;
 }
 
+window.buildPaginationHtml = buildPaginationHtml;
+
 // Re-render pagination on resize so mobile/desktop number display + icons update
 let paginationResizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(paginationResizeTimer);
   paginationResizeTimer = setTimeout(() => {
-    const pag = $("#files-pagination-bottom");
-    if (pag && !pag.classList.contains("hidden") && pag.innerHTML) {
-      // only if currently shown
+    const footer = $("#files-list-footer");
+    if (footer && !footer.classList.contains("hidden")) {
       renderFilesPagination();
+    }
+    if (typeof window.MoviesPanel?.renderPagination === "function") {
+      window.MoviesPanel.renderPagination();
     }
   }, 150);
 });
@@ -2430,13 +3052,121 @@ function syncFileFilterButtons() {
   });
 }
 
+async function cancelDownloadJob(jobId, jobType, btn) {
+  if (!jobId) return;
+  const isBulk = jobType === "bulk_zip";
+  const ok = await showConfirm({
+    title: "Batalkan unduhan?",
+    message: isBulk
+      ? "Proses unduh & kompres ZIP akan dihentikan. File sementara di server dihapus."
+      : "Proses unduh / upload film ini akan dihentikan. File sementara di server dihapus.",
+    okLabel: "Ya, batalkan",
+    danger: true,
+  });
+  if (!ok) return;
+  if (btn) setBtnLoading(btn, true, "Membatalkan…");
+  try {
+    const path = isBulk
+      ? `/api/files/bulk-downloads/${encodeURIComponent(jobId)}/cancel`
+      : `/api/movies/downloads/${encodeURIComponent(jobId)}/cancel`;
+    await api(path, { method: "POST" });
+    notifySuccess("Unduhan dibatalkan.");
+    await loadMovieDownloads();
+  } catch (e) {
+    notifyError(e.message || "Gagal membatalkan");
+  } finally {
+    if (btn) setBtnLoading(btn, false, "Batalkan");
+  }
+}
+
+function renderDownloadJobCard(j) {
+  const isBulk = j.type === "bulk_zip";
+  const pct = j.total
+    ? Math.min(100, Math.round(((j.loaded || 0) / j.total) * 100))
+    : j.status === "done"
+    ? 100
+    : isBulk && j.file_total
+    ? Math.min(100, Math.round(((j.files_done || 0) / j.file_total) * 100))
+    : 0;
+  const sizeStr = j.total
+    ? `${formatSize(j.loaded || 0)} / ${formatSize(j.total)}`
+    : j.loaded
+    ? formatSize(j.loaded)
+    : "";
+  const statusClass =
+    j.status === "error" ? "error" : j.status === "cancelled" ? "hint" : "";
+  let statusHtml = `<span class="hint">${escapeHtml(j.phase || j.status || "")} ${j.message ? "— " + escapeHtml(j.message) : ""}</span>`;
+  if (j.error) {
+    statusHtml = `<span class="error" style="font-size:0.75rem;">${escapeHtml(j.error)}</span>`;
+  }
+  const cancelBtn = j.cancellable
+    ? `<button type="button" class="btn danger sm download-job-cancel" data-cancel-job="${escapeHtml(j.id)}" data-job-type="${escapeHtml(j.type || "movie")}">Batalkan</button>`
+    : "";
+  const tokenQ = j.download_token
+    ? `?token=${encodeURIComponent(j.download_token)}`
+    : "";
+  const fileUrl = isBulk
+    ? `/api/files/bulk-downloads/${encodeURIComponent(j.id)}/file${tokenQ}`
+    : `/api/movies/downloads/${encodeURIComponent(j.id)}/file${tokenQ}`;
+  const defaultName = isBulk
+    ? j.local_filename || "archive.zip"
+    : j.local_filename || j.title || "film.mp4";
+  const localBtn =
+    j.local_download && j.status === "done"
+      ? `<a class="btn sm download-job-file" href="${fileUrl}" download="${escapeHtml(defaultName)}">Unduh file</a>`
+      : "";
+  const indeterminate =
+    j.cancellable && !j.total && j.status !== "done" && !isBulk ? " indeterminate" : "";
+  const modeHint = isBulk
+    ? j.file_total
+      ? `ZIP bulk · ${j.files_done || 0}/${j.file_total} file`
+      : "ZIP bulk"
+    : j.mode === "both"
+    ? "Telegram + perangkat"
+    : j.mode === "download"
+    ? "Unduh perangkat"
+    : j.quality
+    ? `Telegram · ${escapeHtml(j.quality)}`
+    : "Telegram";
+  return `
+    <article class="download-job">
+      <h4 class="download-job-title">${escapeHtml(j.title)}</h4>
+      <p class="hint download-job-mode">${modeHint}</p>
+      <div class="download-job-body">
+        <div class="download-job-progress-block">
+          <div class="download-job-bar${indeterminate}">
+            <div class="download-job-bar-fill" style="width:${pct}%;"></div>
+          </div>
+          <div class="download-job-meta">
+            <span class="download-job-pct">${pct}% ${sizeStr}</span>
+            <span class="download-job-status ${statusClass}">${statusHtml}</span>
+          </div>
+        </div>
+        ${
+          cancelBtn || localBtn
+            ? `<div class="download-job-actions">${localBtn}${cancelBtn}</div>`
+            : ""
+        }
+      </div>
+      ${j.file ? `<p class="download-job-done hint">✓ Tersimpan di Telegram</p>` : ""}
+      ${j.local_download && j.status === "done" ? `<p class="download-job-done hint">✓ File siap diunduh dari server (24 jam)</p>` : ""}
+    </article>
+  `;
+}
+
 async function loadMovieDownloads() {
   const list = $("#downloads-list");
   const empty = $("#downloads-empty");
   if (!list || !empty) return;
   try {
-    const data = await api("/api/movies/downloads");
-    const jobs = data.jobs || [];
+    const [movieData, bulkData] = await Promise.all([
+      api("/api/movies/downloads").catch(() => ({ jobs: [] })),
+      api("/api/files/bulk-downloads").catch(() => ({ jobs: [] })),
+    ]);
+    const jobs = [
+      ...(bulkData.jobs || []).map((j) => ({ ...j, type: "bulk_zip" })),
+      ...(movieData.jobs || []).map((j) => ({ ...j, type: j.type || "movie" })),
+    ].sort((a, b) => (b.created || 0) - (a.created || 0));
     if (jobs.length === 0) {
       hide(list);
       show(empty);
@@ -2444,41 +3174,18 @@ async function loadMovieDownloads() {
     }
     hide(empty);
     show(list);
-    list.innerHTML = jobs
-      .map((j) => {
-        const pct = j.total
-          ? Math.min(100, Math.round(((j.loaded || 0) / j.total) * 100))
-          : j.status === "done"
-          ? 100
-          : 0;
-        const sizeStr = j.total
-          ? `${formatSize(j.loaded || 0)} / ${formatSize(j.total)}`
-          : j.loaded
-          ? formatSize(j.loaded)
-          : "";
-        let statusHtml = `<span class="hint">${escapeHtml(j.phase || j.status || "")} ${j.message ? "— " + escapeHtml(j.message) : ""}</span>`;
-        if (j.error) {
-          statusHtml = `<span class="error" style="font-size:0.75rem;">${escapeHtml(j.error)}</span>`;
-        }
-        return `
-          <div class="download-job" style="border:1px solid var(--border);border-radius:8px;padding:0.5rem;margin-bottom:0.5rem;background:var(--surface2);">
-            <div style="font-weight:600;margin-bottom:0.25rem;">${escapeHtml(j.title)}</div>
-            <div style="height:8px;background:#333;border-radius:4px;overflow:hidden;margin:0.25rem 0;">
-              <div style="height:100%;width:${pct}%;background:var(--accent);transition:width .3s;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:0.75rem;">
-              <span>${pct}% ${sizeStr}</span>
-              <span class="${j.status === "error" ? "error" : ""}">${statusHtml}</span>
-            </div>
-            ${j.file ? `<div class="hint" style="font-size:0.7rem;margin-top:0.2rem;">✓ Tersimpan di Telegram</div>` : ""}
-          </div>
-        `;
-      })
-      .join("");
+    list.innerHTML = jobs.map(renderDownloadJobCard).join("");
   } catch (e) {
     list.innerHTML = `<div class="error" style="font-size:0.8rem;">Gagal muat daftar downloads: ${escapeHtml(e.message || e)}</div>`;
   }
 }
+
+$("#downloads-list")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-cancel-job]");
+  if (!btn) return;
+  e.preventDefault();
+  cancelDownloadJob(btn.dataset.cancelJob, btn.dataset.jobType || "movie", btn);
+});
 
 function renderFileList(files, folderId, meta = {}) {
   const empty = $("#files-empty");
@@ -2488,10 +3195,15 @@ function renderFileList(files, folderId, meta = {}) {
     total: meta.total ?? files.length,
     total_pages: meta.total_pages ?? 1,
     page: meta.page ?? filesPage,
+    per_page: meta.per_page ?? filesPerPage,
     filter: meta.filter ?? filesFilter,
     q: meta.q ?? filesSearch,
     scan_limit_reached: !!meta.scan_limit_reached,
   };
+  if (meta.per_page) {
+    filesPerPage = normalizeFilesPerPage(meta.per_page);
+    syncFilesPerPageSelect();
+  }
   updateFileCountLabel();
   renderFilesPagination();
   syncSelectAllCheckbox();
@@ -2551,6 +3263,7 @@ function renderFileList(files, folderId, meta = {}) {
     grid.appendChild(card);
   });
   updateBulkBar();
+  setupLazyThumbs(grid);
   const openPreviewHandler = (el) => {
     el.onclick = (e) => {
       e.preventDefault();
@@ -2596,7 +3309,7 @@ function buildFilesQuery(folderId) {
     folder_id: String(folderId),
     filter: filesFilter,
     page: String(filesPage),
-    per_page: String(FILES_PER_PAGE),
+    per_page: String(filesPerPage),
     _: String(Date.now()),
   });
   const q = filesSearch.trim();
@@ -2636,7 +3349,10 @@ async function loadFiles(targetFolderId = currentFolderId) {
     renderFileList(data.files || [], folderId, data);
     syncAppState();
   } catch (e) {
-    if (e.name === "AbortError") return;
+    if (e.name === "AbortError") {
+      if (reqId !== filesLoadGen) return;
+      return;
+    }
     if (reqId !== filesLoadGen || !sameFolderId(folderId, currentFolderId)) return;
     const empty = $("#files-empty");
     show(empty);
@@ -3453,38 +4169,64 @@ $("#btn-bulk-download")?.addEventListener("click", async () => {
   if (!ids.length) return;
   const ok = await showConfirm({
     title: "Download ZIP?",
-    message: `${ids.length} file akan diunduh sebagai satu arsip ZIP.`,
-    okLabel: "Ya, download",
+    message: `${ids.length} file akan diunduh ke server, dikompres jadi ZIP, lalu bisa diunduh langsung dari server (bukan lewat Telegram lagi). Pantau progress di menu Downloads.`,
+    okLabel: "Ya, mulai",
   });
   if (!ok) return;
-  setBtnLoading($("#btn-bulk-download"), true, "Menyiapkan ZIP...");
+  setBtnLoading($("#btn-bulk-download"), true, "Mengantrikan…");
   try {
-    const r = await fetch("/api/files/bulk-download", {
+    await api("/api/files/bulk-download", {
       method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder_id: currentFolderId, message_ids: ids }),
+      body: { folder_id: currentFolderId, message_ids: ids },
     });
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      throwApiError(data, r.statusText);
-    }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `telegram-drive-${currentFolderId}-${ids.length}files.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    clearSelection();
     notifySuccess(
       ids.length === 1
-        ? "Download ZIP dimulai (1 file)."
-        : `Download ZIP dimulai (${ids.length} file).`
+        ? "ZIP 1 file masuk antrian. Buka Downloads untuk unduh."
+        : `ZIP ${ids.length} file masuk antrian. Buka Downloads untuk unduh.`
     );
+    showAppPanel("downloads");
+    await loadMovieDownloads();
   } catch (e) {
     if (!isFloodWaitError(e)) notifyError(e.message);
   } finally {
     setBtnLoading($("#btn-bulk-download"), false, "");
+  }
+});
+
+$("#btn-bulk-compress")?.addEventListener("click", async () => {
+  const ids = [...selectedIds];
+  if (!ids.length) return;
+  const defaultName = `archive-${ids.length}files.zip`;
+  const ok = await showConfirm({
+    title: "Simpan ZIP ke Telegram?",
+    message: `${ids.length} file akan dikompres jadi satu arsip ZIP dan disimpan di folder ini. Proses ini lebih cepat daripada download bulk ke browser.`,
+    extraHtml: `<label style="margin-top:0.75rem;display:block">
+      <span class="hint" style="display:block;margin-bottom:0.35rem">Nama file ZIP</span>
+      <input type="text" id="bulk-compress-name" value="${defaultName}" maxlength="200" autocomplete="off" style="width:100%">
+    </label>`,
+    okLabel: "Ya, simpan ZIP",
+  });
+  if (!ok) return;
+  const zipName = ($("#bulk-compress-name")?.value || defaultName).trim();
+  setBtnLoading($("#btn-bulk-compress"), true, "Mengompres…");
+  try {
+    const data = await api("/api/files/bulk-compress", {
+      method: "POST",
+      body: {
+        folder_id: currentFolderId,
+        message_ids: ids,
+        zip_name: zipName,
+      },
+    });
+    clearSelection();
+    await loadFiles();
+    const saved = data.file?.name || zipName;
+    notifySuccess(`ZIP tersimpan: ${saved}`);
+  } catch (e) {
+    if (!isFloodWaitError(e)) notifyError(e.message);
+  } finally {
+    setBtnLoading($("#btn-bulk-compress"), false, "");
   }
 });
 

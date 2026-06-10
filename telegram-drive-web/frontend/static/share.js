@@ -47,6 +47,9 @@ const VISIBILITY_HINTS = {
   preview: "Pengunjung hanya dapat melihat daftar dan pratinjau — unduh dinonaktifkan.",
 };
 
+let shareMaxUploadMb = 2000;
+let shareUploadBusy = false;
+
 function formatSize(bytes) {
   const n = Number(bytes) || 0;
   if (n < 1024) return `${n} B`;
@@ -133,6 +136,57 @@ function sharePreviewUrl(messageId) {
   return `${SHARE_API}/preview/${messageId}`;
 }
 
+function shareThumbUrl(messageId) {
+  return `${SHARE_API}/thumb/${messageId}`;
+}
+
+let shareThumbObserver = null;
+
+function ensureShareThumbObserver() {
+  if (shareThumbObserver) return shareThumbObserver;
+  shareThumbObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const img = entry.target;
+        const src = img.dataset.thumbSrc;
+        if (src && !img.getAttribute("src")) {
+          img.src = src;
+          img.removeAttribute("data-thumb-src");
+        }
+        shareThumbObserver.unobserve(img);
+      });
+    },
+    { root: null, rootMargin: "160px 0px", threshold: 0.01 }
+  );
+  return shareThumbObserver;
+}
+
+function onShareThumbError(img) {
+  if (!img) return;
+  img.hidden = true;
+  const wrap = img.closest(".file-thumb");
+  const fb = wrap?.querySelector(".file-thumb-fallback");
+  if (fb) {
+    fb.hidden = false;
+    wrap?.classList.add("thumb-fallback");
+  }
+}
+
+function setupShareLazyThumbs(root = document) {
+  const scope = root.querySelectorAll ? root : document;
+  const imgs = scope.querySelectorAll?.("img.file-thumb-media[data-thumb-src]") || [];
+  if (!imgs.length) return;
+  const obs = ensureShareThumbObserver();
+  imgs.forEach((img) => {
+    if (!img._thumbErrBound) {
+      img._thumbErrBound = true;
+      img.addEventListener("error", () => onShareThumbError(img), { once: true });
+    }
+    obs.observe(img);
+  });
+}
+
 function shareDownloadUrl(messageId) {
   return `${SHARE_API}/download/${messageId}`;
 }
@@ -143,15 +197,13 @@ function renderShareThumb(file) {
       ${fileTypeBadgeHtml(file)}
     </button>`;
   }
-  if (canShowMediaThumb(file) && isVideoFile(file)) {
-    return `<button type="button" class="file-thumb file-thumb-video" data-preview-id="${file.id}" title="${escapeHtml(file.name)}">
-      <video src="${sharePreviewUrl(file.id)}" muted preload="metadata"></video>
-      <span class="play-badge">▶</span>
-    </button>`;
-  }
-  if (canShowMediaThumb(file) && isImageFile(file)) {
-    return `<button type="button" class="file-thumb file-thumb-img" data-preview-id="${file.id}" title="${escapeHtml(file.name)}">
-      <img src="${sharePreviewUrl(file.id)}" alt="" loading="lazy">
+  if (canShowMediaThumb(file) && (isImageFile(file) || isVideoFile(file))) {
+    const isVideo = isVideoFile(file);
+    const cls = isVideo ? "file-thumb-video" : "file-thumb-img";
+    return `<button type="button" class="file-thumb ${cls}" data-preview-id="${file.id}" title="${escapeHtml(file.name)}">
+      <img class="file-thumb-media" data-thumb-src="${shareThumbUrl(file.id)}" alt="" decoding="async" loading="lazy" width="72" height="72">
+      ${isVideo ? '<span class="play-badge">▶</span>' : ""}
+      <span class="file-thumb-fallback" hidden>${fileTypeBadgeHtml(file)}</span>
     </button>`;
   }
   return `<div class="file-thumb file-thumb-icon">${fileTypeBadgeHtml(file)}</div>`;
@@ -224,11 +276,167 @@ function applyShareMeta(meta) {
   const title = meta.title || (meta.share_type === "file" ? "File dibagikan" : "Folder dibagikan");
   $("#share-title").textContent = title;
   $("#share-password-title").textContent = title;
-  $("#share-visibility-hint").textContent = VISIBILITY_HINTS[meta.visibility] || "";
+  let hint = VISIBILITY_HINTS[meta.visibility] || "";
+  if (meta.share_type === "folder" && meta.allows_upload) {
+    hint += hint ? " " : "";
+    hint += "Pengunjung juga dapat mengunggah file ke folder ini.";
+    if (meta.expires_at) {
+      try {
+        const until = new Date(meta.expires_at).toLocaleString("id-ID", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        hint += ` Upload & akses berlaku sampai ${until}.`;
+      } catch {
+        /* ignore */
+      }
+    }
+  } else if (meta.expires_at) {
+    try {
+      const until = new Date(meta.expires_at).toLocaleString("id-ID", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      hint += hint ? " " : "";
+      hint += `Link berlaku sampai ${until}.`;
+    } catch {
+      /* ignore */
+    }
+  }
+  $("#share-visibility-hint").textContent = hint;
   const toolbar = $("#share-files-toolbar");
   if (toolbar) {
     if (meta.share_type === "file") hide(toolbar);
     else show(toolbar);
+  }
+  if (meta.max_upload_mb) shareMaxUploadMb = Number(meta.max_upload_mb) || shareMaxUploadMb;
+  const uploadPanel = $("#share-upload-panel");
+  if (uploadPanel) {
+    if (meta.share_type === "folder" && meta.allows_upload) {
+      show(uploadPanel);
+      updateShareUploadLimitHint();
+    } else {
+      hide(uploadPanel);
+    }
+  }
+}
+
+function updateShareUploadLimitHint() {
+  const el = $("#share-upload-limit-hint");
+  if (el) el.textContent = `Maksimal per file: ${shareMaxUploadMb} MB`;
+}
+
+function setShareUploadStatus(text, kind) {
+  const el = $("#share-upload-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.remove("hidden", "is-error", "is-ok");
+  if (!text) {
+    hide(el);
+    return;
+  }
+  show(el);
+  if (kind === "error") el.classList.add("is-error");
+  else if (kind === "ok") el.classList.add("is-ok");
+}
+
+function shareUploadMaxBytes() {
+  return (Number(shareMaxUploadMb) || 2000) * 1024 * 1024;
+}
+
+function filterShareUploadFiles(fileList) {
+  const max = shareUploadMaxBytes();
+  const ok = [];
+  const over = [];
+  for (const f of fileList) {
+    if (f.size > max) over.push(f);
+    else ok.push(f);
+  }
+  return { ok, over };
+}
+
+function xhrShareUpload(formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${SHARE_API}/upload`);
+    xhr.withCredentials = true;
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
+    });
+    xhr.addEventListener("load", () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        /* ignore */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+        return;
+      }
+      const detail = typeof data.detail === "string" ? data.detail : data.message || xhr.statusText;
+      const err = new Error(detail || "Upload gagal");
+      err.status = xhr.status;
+      err.code = detail;
+      reject(err);
+    });
+    xhr.addEventListener("error", () => reject(new Error("Jaringan gagal saat upload")));
+    xhr.send(formData);
+  });
+}
+
+async function uploadShareFiles(fileList) {
+  if (shareUploadBusy || !shareMeta?.allows_upload) return;
+  const { ok, over } = filterShareUploadFiles(fileList);
+  if (over.length) {
+    setShareUploadStatus(
+      `${over.length} file melebihi batas ${shareMaxUploadMb} MB dan dilewati.`,
+      "error"
+    );
+  }
+  if (!ok.length) return;
+  shareUploadBusy = true;
+  const drop = $("#share-upload-drop");
+  if (drop) drop.classList.add("is-busy");
+  setShareUploadStatus(`Mengunggah ${ok.length} file…`, null);
+  const fd = new FormData();
+  ok.forEach((f) => fd.append("files", f, f.name));
+  try {
+    const data = await xhrShareUpload(fd, (loaded, total) => {
+      const pct = total ? Math.round((loaded / total) * 100) : 0;
+      setShareUploadStatus(
+        total
+          ? `Mengunggah… ${formatSize(loaded)} / ${formatSize(total)} (${pct}%)`
+          : `Mengunggah… ${formatSize(loaded)}`,
+        null
+      );
+    });
+    const n = data.uploaded?.length ?? ok.length;
+    const failed = data.errors?.length ?? 0;
+    setShareUploadStatus(
+      failed ? `${n} berhasil, ${failed} gagal.` : `${n} file berhasil diunggah.`,
+      failed ? "error" : "ok"
+    );
+    sharePage = 1;
+    await refreshFiles();
+  } catch (e) {
+    const msg =
+      e.code === "share_upload_disabled"
+        ? "Upload dinonaktifkan untuk link ini."
+        : e.code === "share_password_required"
+          ? "Buka link dengan password dulu."
+          : e.message || "Upload gagal.";
+    setShareUploadStatus(msg, "error");
+  } finally {
+    shareUploadBusy = false;
+    if (drop) drop.classList.remove("is-busy");
+    const input = $("#share-upload-input");
+    if (input) input.value = "";
   }
 }
 
@@ -339,6 +547,7 @@ function renderShareFiles(data, page) {
     grid.appendChild(card);
   });
 
+  setupShareLazyThumbs(grid);
   bindSharePreviewHandlers(files);
   updateShareBulkBar();
 
@@ -550,6 +759,41 @@ $("#share-bulk-download")?.addEventListener("click", downloadSelectedShare);
 
 document.querySelectorAll("[data-close='modal-share-preview']").forEach((el) => {
   el.addEventListener("click", closeSharePreview);
+});
+
+const shareUploadDrop = $("#share-upload-drop");
+const shareUploadInput = $("#share-upload-input");
+
+shareUploadDrop?.addEventListener("click", () => {
+  if (!shareUploadBusy) shareUploadInput?.click();
+});
+
+shareUploadInput?.addEventListener("change", () => {
+  const files = shareUploadInput.files ? [...shareUploadInput.files] : [];
+  if (files.length) uploadShareFiles(files);
+});
+
+shareUploadDrop?.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  if (shareMeta?.allows_upload) shareUploadDrop.classList.add("is-dragover");
+});
+
+shareUploadDrop?.addEventListener("dragleave", () => {
+  shareUploadDrop.classList.remove("is-dragover");
+});
+
+shareUploadDrop?.addEventListener("drop", (e) => {
+  e.preventDefault();
+  shareUploadDrop.classList.remove("is-dragover");
+  const files = e.dataTransfer?.files ? [...e.dataTransfer.files] : [];
+  if (files.length) uploadShareFiles(files);
+});
+
+shareUploadDrop?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    shareUploadInput?.click();
+  }
 });
 
 bootstrap();

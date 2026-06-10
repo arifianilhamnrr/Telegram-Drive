@@ -44,6 +44,53 @@
   margin-bottom: 0.75rem;
 }
 
+.share-upload-panel {
+  margin-bottom: 1rem;
+}
+
+.share-upload-drop {
+  border: 2px dashed var(--border, #3a3f4b);
+  border-radius: 12px;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.share-upload-drop:hover,
+.share-upload-drop:focus-visible,
+.share-upload-drop.is-dragover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.share-upload-drop.is-busy {
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.share-upload-drop-title {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.share-upload-input {
+  display: none;
+}
+
+.share-upload-status {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.share-upload-status.is-error {
+  color: var(--danger, #e74c3c);
+}
+
+.share-upload-status.is-ok {
+  color: var(--ok, #2ecc71);
+}
+
 .share-password-form {
   display: flex;
   flex-wrap: wrap;

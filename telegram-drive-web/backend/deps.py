@@ -78,9 +78,7 @@ def optional_user(
 
 
 def is_admin_user(user: User) -> bool:
-    admin = (ADMIN_USERNAME or "").strip().lower()
-    if not admin:
-        return False
+    admin = (ADMIN_USERNAME or "admin").strip().lower()
     return user.username.lower() == admin
 
 

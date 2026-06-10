@@ -28,6 +28,7 @@ class ShareLink:
     visibility: str
     password_hash: Optional[str]
     enabled: bool
+    allow_upload: bool
     expires_at: Optional[str]
     title: Optional[str]
     created_at: str
@@ -94,8 +95,19 @@ class ShareStore:
                 "CREATE INDEX IF NOT EXISTS idx_share_target ON share_links(user_id, folder_id, message_id)"
             )
             conn.commit()
+            self._migrate_schema(conn)
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(share_links)").fetchall()}
+        if "allow_upload" not in cols:
+            conn.execute(
+                "ALTER TABLE share_links ADD COLUMN allow_upload INTEGER NOT NULL DEFAULT 0"
+            )
+            conn.commit()
 
     def _row_to_share(self, row: sqlite3.Row) -> ShareLink:
+        keys = row.keys()
+        allow_upload = bool(row["allow_upload"]) if "allow_upload" in keys else False
         return ShareLink(
             id=int(row["id"]),
             token=row["token"],
@@ -106,6 +118,7 @@ class ShareStore:
             visibility=row["visibility"],
             password_hash=row["password_hash"],
             enabled=bool(row["enabled"]),
+            allow_upload=allow_upload,
             expires_at=row["expires_at"],
             title=row["title"],
             created_at=row["created_at"],
@@ -125,6 +138,7 @@ class ShareStore:
         password: Optional[str] = None,
         expires_in_hours: Optional[int] = None,
         title: Optional[str] = None,
+        allow_upload: bool = False,
     ) -> ShareLink:
         share_type = share_type.strip().lower()
         if share_type not in ("file", "folder"):
@@ -133,6 +147,8 @@ class ShareStore:
             raise ValueError("message_id wajib untuk share file")
         if share_type == "folder":
             message_id = None
+        else:
+            allow_upload = False
         visibility = (visibility or VISIBILITY_BOTH).strip().lower()
         if visibility not in VISIBILITY_CHOICES:
             raise ValueError("visibility tidak valid")
@@ -147,6 +163,9 @@ class ShareStore:
             exp = datetime.now(timezone.utc) + timedelta(hours=hours)
             expires_at = exp.isoformat()
 
+        if allow_upload and not expires_at:
+            raise ValueError("upload_wajib_masa_berlaku")
+
         pw_hash = None
         if password and password.strip():
             if len(password.strip()) < 4:
@@ -160,8 +179,8 @@ class ShareStore:
                 """
                 INSERT INTO share_links (
                     token, user_id, share_type, folder_id, message_id,
-                    visibility, password_hash, enabled, expires_at, title, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    visibility, password_hash, enabled, allow_upload, expires_at, title, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                 """,
                 (
                     token,
@@ -171,6 +190,7 @@ class ShareStore:
                     message_id,
                     visibility,
                     pw_hash,
+                    1 if allow_upload else 0,
                     expires_at,
                     (title or "").strip() or None,
                     created,
@@ -253,6 +273,7 @@ class ShareStore:
         expires_in_hours: Optional[int] = ...,  # type: ignore
         clear_expiry: bool = False,
         title: Optional[str] = None,
+        allow_upload: Optional[bool] = None,
     ) -> ShareLink:
         share = self.get_by_id(share_id, user_id)
         if not share:
@@ -303,6 +324,14 @@ class ShareStore:
         if title is not None:
             fields.append("title = ?")
             values.append((title or "").strip() or None)
+
+        if allow_upload is not None:
+            if share.share_type != "folder":
+                raise ValueError("upload_hanya_untuk_folder")
+            if allow_upload and not share.expires_at and expires_in_hours is ... and not clear_expiry:
+                raise ValueError("upload_wajib_masa_berlaku")
+            fields.append("allow_upload = ?")
+            values.append(1 if allow_upload else 0)
 
         if not fields:
             return share

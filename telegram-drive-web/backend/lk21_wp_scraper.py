@@ -130,10 +130,30 @@ def _best_poster(block: str) -> str:
     for pat in (
         r'<img[^>]+src="(https://[^"]+wp-content/uploads/[^"]+152x228[^"]*)"',
         r'<img[^>]+src="(https://[^"]+wp-content/uploads/[^"]+)"',
+        r'src="(//[^"]+wp-content/uploads/[^"]+)"',
     ):
         m = re.search(pat, block, re.I)
         if m:
             return m.group(1)
+    return ""
+
+
+def _poster_from_detail_html(html: str, base: str) -> str:
+    """Detail pages often expose poster via og:image, not itemprop src."""
+    for pat in (
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<img[^>]+class=["\'][^"\']*wp-post-image[^"\']*["\'][^>]+src=["\']([^"\']+)["\']',
+        r'<img[^>]+src=["\']([^"\']+)["\'][^>]+class=["\'][^"\']*wp-post-image',
+        r'itemprop=["\']image["\'][^>]+src=["\']([^"\']+)["\']',
+        r'itemprop=["\']image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<img[^>]+src=["\']([^"\']+wp-content/uploads/[^"\']+)["\']',
+    ):
+        m = re.search(pat, html, re.I | re.S)
+        if m:
+            abs_url = _make_absolute(m.group(1).strip(), base)
+            if abs_url:
+                return abs_url
     return ""
 
 
@@ -193,7 +213,7 @@ def _parse_wp_article(block: str, base: str) -> Optional[dict]:
     }
 
 
-def parse_list_html(html: str, base: str, *, page: int, kind: str) -> dict:
+def extract_list_items(html: str, base: str) -> List[dict]:
     movies: List[dict] = []
     seen: set[str] = set()
     for block in _WP_ARTICLE_RE.findall(html):
@@ -202,13 +222,21 @@ def parse_list_html(html: str, base: str, *, page: int, kind: str) -> dict:
             continue
         seen.add(item["slug"])
         movies.append(item)
+    return movies
 
+
+def parse_list_html(
+    html: str, base: str, *, page: int, kind: str, per_page: int = 24
+) -> dict:
+    movies = extract_list_items(html, base)
     cur, total = _parse_wp_pagination(html, page=page)
     return {
         "ok": True,
         "source": "scrape_wp",
         "page": cur,
         "total_pages": total,
+        "total": len(movies),
+        "per_page": per_page,
         "count": len(movies),
         "movies": movies,
         "kind": kind,
@@ -301,11 +329,7 @@ def parse_detail_html(html: str, page_url: str, base: str) -> dict:
         html,
         re.I,
     )
-    poster_m = re.search(
-        r'itemprop="image"[^>]+src="([^"]+)"',
-        html,
-        re.I,
-    )
+    poster = _poster_from_detail_html(html, base)
     rating_m = re.search(
         r'itemprop="ratingValue"[^>]*>([\d.]+)<',
         html,
@@ -329,7 +353,7 @@ def parse_detail_html(html: str, page_url: str, base: str) -> dict:
         "scraped": True,
         "source": "scrape_wp",
         "title": title or slug.replace("-", " "),
-        "poster": _make_absolute(poster_m.group(1) if poster_m else None, base),
+        "poster": poster or None,
         "year": year_m.group(1) if year_m else None,
         "rating": rating_m.group(1) if rating_m else None,
         "runtime": runtime_m.group(1).strip() if runtime_m else None,

@@ -57,6 +57,17 @@ def assert_share_active(share_store: ShareStore, share: ShareLink) -> None:
         raise HTTPException(410, "share_expired_or_disabled")
 
 
+def share_allows_upload(share: ShareLink) -> bool:
+    return share.share_type == "folder" and bool(share.allow_upload)
+
+
+def assert_share_allows_upload(share: ShareLink) -> None:
+    if share.share_type != "folder":
+        raise HTTPException(400, "share_upload_folder_only")
+    if not share.allow_upload:
+        raise HTTPException(403, "share_upload_disabled")
+
+
 def check_share_file_target(share: ShareLink, message_id: int) -> None:
     if share.share_type == "file":
         if share.message_id != message_id:
@@ -73,6 +84,7 @@ def share_to_public_dict(share: ShareLink, *, password_required: bool) -> dict:
         "allows_download": visibility_allows_download(share.visibility),
         "allows_preview": visibility_allows_preview(share.visibility),
         "password_required": password_required,
+        "allows_upload": share_allows_upload(share),
         "title": share.title,
         "enabled": share.enabled,
         "expires_at": share.expires_at,
@@ -90,6 +102,7 @@ def share_to_owner_dict(share: ShareLink, share_store: ShareStore, base_url: str
         "message_id": share.message_id,
         "visibility": share.visibility,
         "has_password": bool(share.password_hash),
+        "allow_upload": share_allows_upload(share),
         "enabled": share.enabled,
         "active": active,
         "expires_at": share.expires_at,

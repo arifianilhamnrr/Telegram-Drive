@@ -182,7 +182,7 @@ def _parse_movie_article(article_html: str, base: str) -> Optional[dict]:
     }
 
 
-def _parse_list_html(html: str, base: str, *, page: int) -> dict:
+def _extract_list_items(html: str, base: str) -> List[dict]:
     movies: List[dict] = []
     seen: set[str] = set()
     for block in _ARTICLE_RE.findall(html):
@@ -191,7 +191,11 @@ def _parse_list_html(html: str, base: str, *, page: int) -> dict:
             continue
         seen.add(item["slug"])
         movies.append(item)
+    return movies
 
+
+def _parse_list_html(html: str, base: str, *, page: int, per_page: int = 24) -> dict:
+    movies = _extract_list_items(html, base)
     cur, total = _parse_pagination(html)
     if total <= 1 and page > 1:
         cur = page
@@ -201,8 +205,80 @@ def _parse_list_html(html: str, base: str, *, page: int) -> dict:
         "source": "scrape",
         "page": cur or page,
         "total_pages": max(total, 1),
+        "total": len(movies),
+        "per_page": per_page,
         "count": len(movies),
         "movies": movies,
+    }
+
+
+async def _fetch_list_page_html(
+    client: httpx.AsyncClient, url: str, base: str
+) -> str:
+    return await _fetch_html(client, url, base)
+
+
+async def _virtual_list_from_source(
+    client: httpx.AsyncClient,
+    base: str,
+    *,
+    kind: str,
+    virtual_page: int,
+    per_page: int,
+    build_url,
+    parse_items,
+    parse_meta,
+) -> dict:
+    """Gabung beberapa halaman sumber sampai cukup untuk satu halaman virtual (per_page)."""
+    virtual_page = max(1, min(int(virtual_page), 500))
+    per_page = _normalize_per_page(per_page)
+    offset = (virtual_page - 1) * per_page
+    need = offset + per_page
+
+    accumulated: List[dict] = []
+    seen: set[str] = set()
+    source_page = 1
+    source_total_pages = 1
+    items_per_source = 0
+
+    while len(accumulated) < need and source_page <= max(source_total_pages, 1):
+        if source_page > 60:
+            break
+        url = build_url(base, kind, source_page)
+        html = await _fetch_list_page_html(client, url, base)
+        batch = parse_items(html, base)
+        if not batch:
+            break
+        if not items_per_source:
+            items_per_source = len(batch)
+        _, source_total_pages = parse_meta(html, source_page)
+        for item in batch:
+            slug = (item.get("slug") or "").strip()
+            if slug and slug in seen:
+                continue
+            if slug:
+                seen.add(slug)
+            accumulated.append(item)
+        if source_page >= source_total_pages:
+            break
+        source_page += 1
+
+    chunk = accumulated[offset : offset + per_page]
+    avg = items_per_source or max(len(chunk), 16)
+    estimated_total = max(len(accumulated), source_total_pages * avg)
+    virtual_total_pages = max(1, (estimated_total + per_page - 1) // per_page)
+    if len(accumulated) <= offset and virtual_page > 1:
+        virtual_total_pages = min(virtual_total_pages, virtual_page - 1)
+
+    return {
+        "ok": True,
+        "page": virtual_page,
+        "total_pages": virtual_total_pages,
+        "total": estimated_total,
+        "per_page": per_page,
+        "count": len(chunk),
+        "movies": chunk,
+        "kind": kind,
     }
 
 
@@ -227,48 +303,77 @@ async def _get_search_api_url(client: httpx.AsyncClient, base: str) -> str:
     return "https://gudangvape.com/"
 
 
-async def list_movies(kind: str, page: int = 1) -> dict:
+def _normalize_per_page(per_page: int) -> int:
+    n = max(2, min(int(per_page or 24), 48))
+    return n if n % 2 == 0 else n + 1
+
+
+async def list_movies(kind: str, page: int = 1, *, per_page: int = 24) -> dict:
     kind = (kind or "new").strip().lower()
     page = max(1, min(int(page), 500))
+    per_page = _normalize_per_page(per_page)
     base = await get_lk21_base()
 
     if wp.is_wp_mirror_base(base):
-        path = wp.list_path(kind, page)
-        url = f"{base}{path}"
         async with httpx.AsyncClient(timeout=45.0) as client:
-            html = await _fetch_html(client, url, base)
-        out = wp.parse_list_html(html, base, page=page, kind=kind)
-        out["list_url"] = url
+            out = await _virtual_list_from_source(
+                client,
+                base,
+                kind=kind,
+                virtual_page=page,
+                per_page=per_page,
+                build_url=lambda b, k, sp: f"{b}{wp.list_path(k, sp)}",
+                parse_items=wp.extract_list_items,
+                parse_meta=lambda html, sp: wp._parse_wp_pagination(html, page=sp),
+            )
+        out["source"] = "scrape_wp"
+        out["list_url"] = f"{base}{wp.list_path(kind, 1)}"
         return out
 
     if kind not in _LIST_PATHS:
         raise ValueError("kind tidak valid")
-    path_tpl = _LIST_PATHS[kind]
-    path = path_tpl.format(page=page) if "{page}" in path_tpl else path_tpl
-    url = f"{base}{path}"
-
     async with httpx.AsyncClient(timeout=45.0) as client:
-        html = await _fetch_html(client, url, base)
-    out = _parse_list_html(html, base, page=page)
+        out = await _virtual_list_from_source(
+            client,
+            base,
+            kind=kind,
+            virtual_page=page,
+            per_page=per_page,
+            build_url=lambda b, k, sp: (
+                f"{b}{_LIST_PATHS[k].format(page=sp) if '{page}' in _LIST_PATHS[k] else _LIST_PATHS[k]}"
+            ),
+            parse_items=_extract_list_items,
+            parse_meta=lambda html, sp: _parse_pagination(html),
+        )
+    out["source"] = "scrape"
     out["kind"] = kind
-    out["list_url"] = url
+    out["list_url"] = f"{base}{_LIST_PATHS.get(kind, '/')}"
     return out
 
 
-async def search_movies(query: str, page: int = 1) -> dict:
+async def search_movies(query: str, page: int = 1, *, per_page: int = 24) -> dict:
     q = (query or "").strip()
     if len(q) < 2:
         raise ValueError("query_min_2")
     page = max(1, min(int(page), 100))
+    per_page = _normalize_per_page(per_page)
 
     base = await get_lk21_base()
     if wp.is_wp_mirror_base(base):
-        url = wp.search_url(base, q, page)
         async with httpx.AsyncClient(timeout=45.0) as client:
-            html = await _fetch_html(client, url, base)
-        out = wp.parse_list_html(html, base, page=page, kind="search")
+            out = await _virtual_list_from_source(
+                client,
+                base,
+                kind="search",
+                virtual_page=page,
+                per_page=per_page,
+                build_url=lambda b, _k, sp: wp.search_url(b, q, sp),
+                parse_items=wp.extract_list_items,
+                parse_meta=lambda html, sp: wp._parse_wp_pagination(html, page=sp),
+            )
+        out["source"] = "scrape_wp"
         out["query"] = q
-        out["list_url"] = url
+        out["list_url"] = wp.search_url(base, q, 1)
         return out
 
     async with httpx.AsyncClient(timeout=45.0) as client:
@@ -309,16 +414,20 @@ async def search_movies(query: str, page: int = 1) -> dict:
         )
 
     total = int(payload.get("total") or len(movies))
-    per_page = max(len(movies), 1)
-    total_pages = max(1, (total + per_page - 1) // per_page)
+    page_size = per_page
+    start = (page - 1) * page_size
+    page_movies = movies[start : start + page_size]
+    total_pages = max(1, (total + page_size - 1) // page_size)
 
     return {
         "ok": True,
         "source": "scrape_search",
         "page": page,
         "total_pages": total_pages,
-        "count": len(movies),
-        "movies": movies,
+        "total": total,
+        "per_page": page_size,
+        "count": len(page_movies),
+        "movies": page_movies,
         "query": q,
     }
 
@@ -442,6 +551,14 @@ async def resolve_stream(iframe_url: str) -> dict:
     iframe_url = (iframe_url or "").strip()
     if not iframe_url.startswith("http"):
         raise ValueError("iframe_url tidak valid")
+
+    low = iframe_url.lower()
+    if "playerp2p" in low or "p2pplay" in low:
+        from .movie_telegram_save import try_resolve_p2p_stream
+
+        p2p = await try_resolve_p2p_stream(iframe_url, referer=iframe_url)
+        if p2p and (p2p.get("m3u8") or p2p.get("mp4")):
+            return p2p
 
     base = await get_lk21_base()
     if wp.is_wp_mirror_base(base) and wp.is_direct_embed(iframe_url):

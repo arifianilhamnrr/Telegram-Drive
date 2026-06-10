@@ -6,7 +6,7 @@
   <title>Telegram Drive — Share</title>
   <link rel="stylesheet" href="/static/themes.css?v=56">
   <link rel="stylesheet" href="/static/style.css?v=56">
-  <link rel="stylesheet" href="/static/share.css?v=56">
+  <link rel="stylesheet" href="/static/share.css?v=58">
 </head>
 <body class="share-page-body" data-theme="default">
   <div class="share-page">
@@ -36,6 +36,14 @@
       <div id="share-content" class="hidden">
         <h1 id="share-title" class="share-title">Folder</h1>
         <p id="share-visibility-hint" class="hint share-visibility-hint"></p>
+        <div id="share-upload-panel" class="share-upload-panel hidden">
+          <div id="share-upload-drop" class="share-upload-drop" tabindex="0" role="button" aria-label="Unggah file">
+            <p class="share-upload-drop-title">Seret file ke sini atau klik untuk memilih</p>
+            <p id="share-upload-limit-hint" class="hint">Maksimal per file: —</p>
+            <input type="file" id="share-upload-input" class="share-upload-input" multiple hidden>
+          </div>
+          <div id="share-upload-status" class="share-upload-status hidden"></div>
+        </div>
         <div id="share-files-toolbar" class="files-toolbar share-files-toolbar hidden">
           <div class="file-filters" role="tablist" aria-label="Filter jenis file">
             <button type="button" class="file-filter active" data-share-filter="all">Semua</button>
@@ -73,6 +81,6 @@
     </div>
   </div>
 
-  <script src="/static/share.js?v=56"></script>
+  <script src="/static/share.js?v=58"></script>
 </body>
 </html>
