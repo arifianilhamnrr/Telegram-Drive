@@ -24,12 +24,9 @@ data/code_catalog/*
 data/telegram_api.json
 data/lk21_domain.json
 data/anime_sources.json
-data/adult_content.json
 data/nai_home.html
 data/anime/*
 !data/anime/.gitkeep
-data/adult/*
-!data/adult/.gitkeep
 
 # Logs & install artifacts
 *.log
